@@ -7,6 +7,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime
 
 app = Flask(__name__)
 app.secret_key = 'sab_kamao_secret_key_123'
@@ -19,7 +20,7 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN')''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '')''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
@@ -33,6 +34,22 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE users ADD COLUMN password TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE tasks ADD COLUMN worker_phone TEXT DEFAULT ''")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE tasks ADD COLUMN start_time TEXT DEFAULT ''")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE tasks ADD COLUMN completion_otp TEXT DEFAULT ''")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE tasks ADD COLUMN finish_time TEXT DEFAULT ''")
     except:
         pass
 
@@ -232,7 +249,7 @@ HTML_TEMPLATE = """
                     <div style="border-bottom:1px solid #eee; padding:10px 0;">
                         <b>{{ task[1] }}</b><br>
                         <small style="color:#555;">Payment Mode: <b>{{ task[2] }}</b></small>
-                        <form method="POST" style="margin-top:5px;" onsubmit="initTaskStart()">
+                        <form method="POST" style="margin-top:5px;" onsubmit="initTaskStart('{{ task[0] }}')">
                             <input type="hidden" name="action" value="verify_task_otp">
                             <input type="hidden" name="task_id" value="{{ task[0] }}">
                             <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required>
@@ -242,17 +259,29 @@ HTML_TEMPLATE = """
                 {% endfor %}
             </div>
 
-            {% if session.get('active_task') %}
+            {% if active_task_info %}
                 <div class="card">
                     <h3 style="text-align:center; color:#1c4d25; margin-top:0;">⏱️ Live Work Counter</h3>
-                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b id="active-task-title">{{ session.get('active_task_title') }}</b></p>
+                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b>{{ active_task_info[1] }}</b></p>
                     <div class="timer" id="time-display">00:00:00</div>
                     <div style="text-align:center; font-size:20px; color:#27ae60; font-weight:bold;" id="earning-display">Earned: ₹0.00</div>
-                    <form method="POST" style="margin-top:15px;" onsubmit="clearTaskTimer()">
-                        <input type="hidden" name="action" value="complete_work">
-                        <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
-                        <input type="submit" value="Finish Work & Collect Earnings" style="background:#e74c3c;">
-                    </form>
+                    
+                    {% if not active_task_info[3] %}
+                        <!-- Worker has not finished yet -->
+                        <form method="POST" style="margin-top:15px;" onsubmit="setFinishTimestamp()">
+                            <input type="hidden" name="action" value="worker_finish_work">
+                            <input type="hidden" name="task_id" value="{{ active_task_info[0] }}">
+                            <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
+                            <input type="submit" value="Finish Work & Get Owner OTP" style="background:#e67e22;">
+                        </form>
+                    {% else %}
+                        <!-- Worker finished, showing completion OTP to worker -->
+                        <div style="background:#e8f5e9; border:1px solid #27ae60; padding:12px; border-radius:8px; text-align:center; margin-top:15px;">
+                            <p style="margin:0 0 5px 0; font-size:13px; color:#2e7d32;"><b>Your Completion OTP:</b></p>
+                            <span style="font-size:26px; font-weight:bold; color:#1c4d25;">{{ active_task_info[3] }}</span>
+                            <p style="margin:5px 0 0 0; font-size:11px; color:#555;">Ye OTP Kam Dene Wale (Task Owner) ko dein taaki wo final submit karein.</p>
+                        </div>
+                    {% endif %}
                 </div>
             {% endif %}
         {% endif %}
@@ -272,6 +301,37 @@ HTML_TEMPLATE = """
                     </select>
                     <input type="submit" value="Post Task & Generate OTP">
                 </form>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & History</h3>
+                {% if not my_tasks %}
+                    <p style="color:#888; font-size:14px;">Aapne abhi tak koi task post nahi kiya hai.</p>
+                {% else %}
+                    {% for t in my_tasks %}
+                        <div style="border-bottom:1px solid #eee; padding:12px 0;">
+                            <b>{{ t[1] }}</b><br>
+                            <small style="color:#555;">Mode: <b>{{ t[2] }}</b> | Start OTP: <b style="color:#e67e22;">{{ t[3] }}</b></small><br>
+                            <small style="color:#666;">Posted Time: {{ t[5] }}</small><br>
+                            <small style="color:#666;">Status: <b>{{ t[4] }}</b></small>
+                            {% if t[4] == 'COMPLETED' %}
+                                <br><small style="color:#27ae60;">Finished Time: {{ t[6] }}</small>
+                            {% endif %}
+                            
+                            {% if t[4] == 'WAITING_OWNER_APPROVAL' %}
+                                <div style="background:#fff3e0; padding:10px; border-radius:8px; margin-top:8px; border:1px solid #ffe0b2;">
+                                    <p style="margin:0 0 5px 0; font-size:12px; color:#d84315;"><b>Worker ne kaam khatam kar liya hai. Worker dwara diya gaya Completion OTP yahan dalein:</b></p>
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="owner_verify_completion">
+                                        <input type="hidden" name="task_id" value="{{ t[0] }}">
+                                        <input type="number" name="entered_completion_otp" placeholder="Enter Completion OTP" required style="padding:8px; font-size:13px;">
+                                        <input type="submit" value="Final Complete & Close Task" style="background:#27ae60; padding:8px; font-size:13px;">
+                                    </form>
+                                </div>
+                            {% endif %}
+                        </div>
+                    {% endfor %}
+                {% endif %}
             </div>
         {% endif %}
 
@@ -448,27 +508,26 @@ HTML_TEMPLATE = """
 
         const ratePerHour = 75;
 
-        function initTaskStart() {
-            // Set start timestamp when user starts task
+        function initTaskStart(taskId) {
             if (!localStorage.getItem('sab_kamao_start_time')) {
                 localStorage.setItem('sab_kamao_start_time', Date.now().toString());
+                localStorage.setItem('sab_kamao_task_id', taskId);
             }
         }
 
-        function clearTaskTimer() {
-            localStorage.removeItem('sab_kamao_start_time');
+        function setFinishTimestamp() {
+            // Marker when worker finishes
         }
 
         function updateTimer() {
             const timerElem = document.getElementById('time-display');
             if (timerElem) {
-                {% if session.get('active_task') %}
+                {% if active_task_info %}
                     let startTime = localStorage.getItem('sab_kamao_start_time');
                     if (!startTime) {
                         startTime = Date.now().toString();
                         localStorage.setItem('sab_kamao_start_time', startTime);
                     }
-                    // Calculate exact elapsed seconds based on real wall-clock time (works even if screen is off)
                     let now = Date.now();
                     let seconds = Math.floor((now - parseInt(startTime)) / 1000);
                     if (seconds < 0) seconds = 0;
@@ -483,6 +542,7 @@ HTML_TEMPLATE = """
                     document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
                 {% else %}
                     localStorage.removeItem('sab_kamao_start_time');
+                    localStorage.removeItem('sab_kamao_task_id');
                 {% endif %}
             }
         }
@@ -639,40 +699,50 @@ def home():
             c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
             task = c.fetchone()
             if task and str(task[0]).strip() == str(input_otp):
-                c.execute("UPDATE tasks SET status = 'IN_PROGRESS' WHERE id = ?", (task_id,))
+                start_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
                 conn.commit()
-                session['active_task'] = task_id
-                session['active_task_title'] = task[1]
                 msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
             else:
                 msg = "❌ Galat OTP ya Task Pehle se active hai!"
-        elif action == 'complete_work':
+        elif action == 'worker_finish_work':
+            task_id = request.form.get('task_id')
             total_time_seconds = float(request.form.get('elapsed_seconds', 0))
             hours = total_time_seconds / 3600
             total_earned = round(hours * 75, 2)
             if total_earned < 1.0:
                 total_earned = 1.0
+            
+            # Generate completion OTP for task owner
+            comp_otp = str(random.randint(1000, 9999))
+            finish_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
+            c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ? WHERE id = ? AND worker_phone = ?", 
+                        (comp_otp, finish_dt, task_id, phone))
+            
+            # Temp credit to wallet or pending balance
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
             c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
                         (phone, total_earned, "Work Earned (₹75/hr)"))
-            active_task_id = session.get('active_task')
-            if active_task_id:
-                c.execute("UPDATE tasks SET status = 'COMPLETED' WHERE id = ?", (active_task_id,))
             conn.commit()
-            session.pop('active_task', None)
-            session.pop('active_task_title', None)
-            msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye aur Wallet me add ho gaye!"
+            msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye. Ab Kam Dene Wale (Owner) ko apna Completion OTP dein taaki wo task final close kar sake."
 
     c.execute("SELECT balance, profile_pic FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
     balance = res[0] if res else 0.0
     profile_pic = res[1] if res else ''
 
+    # Get available open tasks
     c.execute("SELECT id, title, payment_method FROM tasks WHERE status = 'OPEN'")
     open_tasks = c.fetchall()
+
+    # Check if this user has any active/waiting task in progress permanently bound to them in DB
+    c.execute("SELECT id, title, status, completion_otp FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
+    active_task_info = c.fetchone()
+
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, active_task_info=active_task_info, msg=msg)
 
 @app.route('/kam_do', methods=['GET', 'POST'])
 def kam_do():
@@ -689,18 +759,34 @@ def kam_do():
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
             gen_otp = str(random.randint(1000, 9999))
-            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp) VALUES (?, ?, ?, ?)",
-                        (phone, title, pay_method, gen_otp))
+            post_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time) VALUES (?, ?, ?, ?, 'OPEN', ?)",
+                        (phone, title, pay_method, gen_otp, post_dt))
             conn.commit()
             msg = f"✅ Task Posted! OTP: <b style='font-size:22px; color:#e67e22;'>{gen_otp}</b> (Ye OTP kaam karne wale ko dein)"
+        elif action == 'owner_verify_completion':
+            task_id = request.form.get('task_id')
+            entered_otp = request.form.get('entered_completion_otp', '').strip()
+            c.execute("SELECT completion_otp, provider_phone FROM tasks WHERE id = ? AND status = 'WAITING_OWNER_APPROVAL'", (task_id,))
+            t_row = c.fetchone()
+            if t_row and t_row[1] == phone and str(t_row[0]).strip() == str(entered_otp):
+                c.execute("UPDATE tasks SET status = 'COMPLETED' WHERE id = ?", (task_id,))
+                conn.commit()
+                msg = "✅ Task successfully verified and closed!"
+            else:
+                msg = "❌ Galat Completion OTP!"
 
     c.execute("SELECT balance, profile_pic FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
     balance = res[0] if res else 0.0
     profile_pic = res[1] if res else ''
+
+    # Permanent history of tasks posted by this user
+    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
+    my_tasks = c.fetchall()
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, my_tasks=my_tasks, msg=msg)
 
 @app.route('/refer', methods=['GET'])
 def refer():
@@ -769,7 +855,7 @@ def withdraw():
                     if new_total_withdrawn >= 5000:
                         referrer_phone = ref_record[0]
                         c.execute('UPDATE users SET balance = balance + 500.0 WHERE phone = ?', (referrer_phone,))
-                        c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
+                        c.execute("INSERT transactions (phone, amount, title) VALUES (?, ?, ?)",
                                     (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)"))
                         c.execute("UPDATE referrals SET milestone_paid = 1, status = 'MILESTONE_REACHED' WHERE referred_phone = ?", (phone,))
                         conn.commit()
