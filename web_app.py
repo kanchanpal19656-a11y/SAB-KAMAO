@@ -44,7 +44,6 @@ ADMIN_EMAIL = "rp619653@gmail.com"
 
 def send_email_otp(to_email, otp_code):
     try:
-        # Agar aap chahte hain ki testing ke dauran email bhejne ki koshish hi na ho aur seedha fast login chale:
         print(f"==========================================")
         print(f"🔑 TEST LOGIN OTP FOR {to_email} : {otp_code}")
         print(f"==========================================")
