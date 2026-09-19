@@ -45,12 +45,28 @@ ADMIN_EMAIL = "rp619653@gmail.com"
 def send_email_otp(to_email, otp_code):
     try:
         print(f"==========================================")
-        print(f"🔑 TEST LOGIN OTP FOR {to_email} : {otp_code}")
+        print(f"🔑 LIVE SCREEN OTP FOR {to_email} : {otp_code}")
         print(f"==========================================")
-        return True
+        return otp_code
     except Exception as e:
         print("OTP Error:", e)
-        return True
+        return otp_code
+
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        otp = str(random.randint(1000, 9999))
+        
+        send_email_otp(email, otp)
+        
+        session['pending_otp'] = otp
+        session['pending_email'] = email
+        
+        flash(f"🔑 Aapka Test OTP yeh raha: {otp}", "success")
+        return redirect(url_for('verify_otp'))
+        
+    return render_template('login.html')
 
 def send_withdrawal_email(phone_or_email, amount, withdraw_type, details):                              
     try:                                                  
