@@ -48,11 +48,7 @@ def send_email_otp(to_email, otp_code):
         print(f"==========================================")
         print(f"🔑 TEST LOGIN OTP FOR {to_email} : {otp_code}")
         print(f"==========================================")
-        
-        # Agar aap chahte hain ki default OTP hamesha '1234' ho testing ke liye:
-        # (Aap ise apne hisab se rakh sakte hain)
         return True
-        
     except Exception as e:
         print("OTP Error:", e)
         return True
