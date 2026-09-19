@@ -26,6 +26,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     c.execute('''CREATE TABLE IF NOT EXISTS reels
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS reel_comments
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, reel_id INTEGER, commenter_phone TEXT, comment_text TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
     for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
         try:
@@ -216,10 +218,10 @@ HTML_TEMPLATE = """
             border: 2px solid #27ae60; display: inline-block; vertical-align: middle; margin-right: 10px; background: #e8f5e9; text-align:center; line-height:45px; font-size:20px;
         }
         .reel-card { background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); color: #fff; }
-        .reel-header { padding: 12px; display: flex; align-items: center; background: rgba(0,0,0,0.7); }
+        .reel-header { padding: 12px; display: flex; align-items: center; background: rgba(0,0,0,0.7); justify-content: space-between; }
         .reel-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 2px solid #27ae60; margin-right: 10px; background: #333; text-align:center; line-height:38px; font-size:16px; }
         .reel-video { width: 100%; max-height: 400px; background: #111; display: block; object-fit: contain; }
-        .reel-footer { padding: 12px; background: rgba(0,0,0,0.8); display: flex; justify-content: space-between; align-items: center; }
+        .reel-footer { padding: 12px; background: rgba(0,0,0,0.8); }
         .refer-box { background: #f9fdfa; border: 2px dashed #27ae60; padding: 15px; border-radius: 10px; text-align: center; margin-top: 10px; }
     </style>
 </head>
@@ -398,26 +400,77 @@ HTML_TEMPLATE = """
                     {% for reel in all_reels %}
                         <div class="reel-card">
                             <div class="reel-header">
-                                {% if reel[5] %}
-                                    <img src="/static/uploads/{{ reel[5] }}" class="reel-avatar">
-                                {% else %}
-                                    <div class="reel-avatar">👤</div>
-                                {% endif %}
-                                <div>
-                                    <b style="font-size:14px; color:#fff;">{{ reel[1] }}</b><br>
-                                    <small style="color:#aaa; font-size:11px;">{{ reel[4] }}</small>
+                                <div style="display:flex; align-items:center;">
+                                    {% if reel[5] %}
+                                        <img src="/static/uploads/{{ reel[5] }}" class="reel-avatar">
+                                    {% else %}
+                                        <div class="reel-avatar">👤</div>
+                                    {% endif %}
+                                    <div>
+                                        <b style="font-size:14px; color:#fff;">{{ reel[1] }}</b><br>
+                                        <small style="color:#aaa; font-size:11px;">{{ reel[4] }}</small>
+                                    </div>
                                 </div>
+                                {% if reel[1] == phone %}
+                                    <div>
+                                        <button onclick="toggleEditReel('{{ reel[0] }}')" style="background:#3498db; border:none; color:#fff; padding:4px 8px; font-size:11px; border-radius:4px; width:auto; margin-right:4px;">✏️ Edit</button>
+                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Kya aap is reel ko delete karna chahte hain?');">
+                                            <input type="hidden" name="action" value="delete_reel">
+                                            <input type="hidden" name="reel_id" value="{{ reel[0] }}">
+                                            <button type="submit" style="background:#e74c3c; border:none; color:#fff; padding:4px 8px; font-size:11px; border-radius:4px; width:auto;">🗑️ Delete</button>
+                                        </form>
+                                    </div>
+                                {% endif %}
                             </div>
+
+                            <!-- Edit Reel Form (Hidden by default) -->
+                            {% if reel[1] == phone %}
+                                <div id="edit_reel_{{ reel[0] }}" style="display:none; background:#222; padding:10px; border-bottom:1px solid #444;">
+                                    <form method="POST">
+                                        <input type="hidden" name="action" value="edit_reel">
+                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
+                                        <input type="text" name="new_caption" value="{{ reel[2] }}" required style="background:#333; color:#fff; border:1px solid #555; padding:8px; font-size:13px;">
+                                        <input type="submit" value="Update Title" style="background:#27ae60; padding:6px; font-size:12px;">
+                                    </form>
+                                </div>
+                            {% endif %}
+
                             <video src="/static/videos/{{ reel[3] }}" controls class="reel-video"></video>
+                            
                             <div class="reel-footer">
-                                <span style="font-size:13px; color:#ddd; flex:1; padding-right:10px;">{{ reel[2] }}</span>
-                                <form method="POST" style="margin:0;">
-                                    <input type="hidden" name="action" value="like_reel">
-                                    <input type="hidden" name="reel_id" value="{{ reel[0] }}">
-                                    <button type="submit" style="background:transparent; border:1px solid #e74c3c; color:#e74c3c; padding:6px 12px; font-size:13px; border-radius:20px; width:auto;">
-                                        <i class="fa-solid fa-heart"></i> {{ reel[6] }} Likes
-                                    </button>
-                                </form>
+                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                                    <span style="font-size:14px; color:#fff; font-weight:bold; flex:1;">{{ reel[2] }}</span>
+                                    <form method="POST" style="margin:0;">
+                                        <input type="hidden" name="action" value="like_reel">
+                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
+                                        <button type="submit" style="background:transparent; border:1px solid #e74c3c; color:#e74c3c; padding:4px 10px; font-size:12px; border-radius:20px; width:auto;">
+                                            <i class="fa-solid fa-heart"></i> {{ reel[6] }}
+                                        </button>
+                                    </form>
+                                </div>
+
+                                <!-- Comments Section -->
+                                <div style="border-top:1px solid #333; padding-top:8px; margin-top:8px;">
+                                    <small style="color:#aaa; font-weight:bold;"><i class="fa-solid fa-comments"></i> Comments:</small>
+                                    <div style="max-height:100px; overflow-y:auto; margin:5px 0;">
+                                        {% set comments = get_reel_comments(reel[0]) %}
+                                        {% if not comments %}
+                                            <p style="color:#778; font-size:11px; margin:2px 0;">No comments yet. Be the first to comment!</p>
+                                        {% else %}
+                                            {% for comm in comments %}
+                                                <div style="font-size:11px; margin-bottom:4px; background:#1a1a1a; padding:5px; border-radius:4px;">
+                                                    <b style="color:#27ae60;">{{ comm[0] }}:</b> <span style="color:#ddd;">{{ comm[1] }}</span>
+                                                </div>
+                                            {% endfor %}
+                                        {% endif %}
+                                    </div>
+                                    <form method="POST" style="display:flex; gap:5px; margin-top:5px;">
+                                        <input type="hidden" name="action" value="add_comment">
+                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
+                                        <input type="text" name="comment_text" placeholder="Write a comment..." required style="background:#222; color:#fff; border:1px solid #444; padding:6px; font-size:12px; margin:0; border-radius:4px; flex:1;">
+                                        <button type="submit" style="background:#3498db; padding:6px 12px; font-size:12px; margin:0; border-radius:4px; width:auto;">Post</button>
+                                    </form>
+                                </div>
                             </div>
                         </div>
                     {% endfor %}
@@ -623,6 +676,10 @@ HTML_TEMPLATE = """
             var elem = document.getElementById('changePasswordSection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
         }
+        function toggleEditReel(reelId) {
+            var elem = document.getElementById('edit_reel_' + reelId);
+            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
+        }
         function toggleWithdrawFields() {
             var typeElem = document.getElementById('withdraw_type');
             if(!typeElem) return;
@@ -670,7 +727,6 @@ HTML_TEMPLATE = """
         const ratePerHour = 75;
 
         function initTaskStart(taskId) {
-            // Fresh start for new task
             localStorage.removeItem('sab_kamao_start_' + taskId);
             localStorage.setItem('sab_kamao_start_' + taskId, Date.now().toString());
         }
@@ -711,6 +767,16 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+def get_reel_comments(reel_id):
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+    c.execute("SELECT commenter_phone, comment_text, timestamp FROM reel_comments WHERE reel_id = ? ORDER BY id DESC", (reel_id,))
+    comms = c.fetchall()
+    conn.close()
+    return comms
+
+app.jinja_env.globals.update(get_reel_comments=get_reel_comments)
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -872,7 +938,6 @@ def home():
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'verify_task_otp':
-            # Check if user already has an active task
             c.execute("SELECT id FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
             existing_active = c.fetchone()
             if existing_active:
@@ -886,7 +951,7 @@ def home():
                     start_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                     c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
                     conn.commit()
-                    msg = "🎉 OTP Verified! Work Started. Timer shalu ho gaya hai."
+                    msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
                 else:
                     msg = "❌ Galat OTP ya Task Pehle se active hai!"
         elif action == 'worker_finish_work':
@@ -1023,6 +1088,33 @@ def reels():
             reel_id = request.form.get('reel_id')
             c.execute("UPDATE reels SET likes = likes + 1 WHERE id = ?", (reel_id,))
             conn.commit()
+        elif action == 'edit_reel':
+            reel_id = request.form.get('reel_id')
+            new_caption = request.form.get('new_caption', '').strip()
+            c.execute("UPDATE reels SET caption = ? WHERE id = ? AND uploader_phone = ?", (new_caption, reel_id, phone))
+            conn.commit()
+            msg = "✅ Reel title updated successfully!"
+        elif action == 'delete_reel':
+            reel_id = request.form.get('reel_id')
+            c.execute("SELECT video_filename FROM reels WHERE id = ? AND uploader_phone = ?", (reel_id, phone))
+            row = c.fetchone()
+            if row:
+                v_file = row[0]
+                try:
+                    os.remove(os.path.join(app.config['VIDEO_FOLDER'], v_file))
+                except:
+                    pass
+                c.execute("DELETE FROM reels WHERE id = ?", (reel_id,))
+                c.execute("DELETE FROM reel_comments WHERE reel_id = ?", (reel_id,))
+                conn.commit()
+                msg = "🗑️ Reel deleted successfully!"
+        elif action == 'add_comment':
+            reel_id = request.form.get('reel_id')
+            comment_text = request.form.get('comment_text', '').strip()
+            if comment_text:
+                c.execute("INSERT INTO reel_comments (reel_id, commenter_phone, comment_text) VALUES (?, ?, ?)",
+                            (reel_id, phone, comment_text))
+                conn.commit()
 
     c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
@@ -1158,7 +1250,6 @@ def download_pdf():
     rows = c.fetchall()
     conn.close()
 
-    # Generate plain text / HTML report that browser can save or print as PDF
     html_content = f"""
     <html>
     <head><title>{title_text}</title></head>
