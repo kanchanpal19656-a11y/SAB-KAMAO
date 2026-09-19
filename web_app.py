@@ -8,6 +8,8 @@ from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
 
 app = Flask(__name__)
+with app.app_context():
+    init_db()
 app.secret_key = 'sab_kamao_secret_key_123'       
 
 # ---------------- FILE UPLOAD CONFIG ----------------
