@@ -223,7 +223,7 @@ HTML_TEMPLATE = """
                     <div style="border-bottom:1px solid #eee; padding:10px 0;">
                         <b>{{ task[1] }}</b><br>
                         <small style="color:#555;">Payment Mode: <b>{{ task[2] }}</b></small>
-                        <form method="POST" style="margin-top:5px;">
+                        <form method="POST" style="margin-top:5px;" onsubmit="startTaskTimer('{{ task[1] }}')">
                             <input type="hidden" name="action" value="verify_task_otp">
                             <input type="hidden" name="task_id" value="{{ task[0] }}">
                             <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required>
@@ -236,10 +236,10 @@ HTML_TEMPLATE = """
             {% if session.get('active_task') %}
                 <div class="card">
                     <h3 style="text-align:center; color:#1c4d25; margin-top:0;">⏱️ Live Work Counter</h3>
-                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b>{{ session.get('active_task_title') }}</b></p>
+                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b id="active-task-title">{{ session.get('active_task_title') }}</b></p>
                     <div class="timer" id="time-display">00:00:00</div>
                     <div style="text-align:center; font-size:20px; color:#27ae60; font-weight:bold;" id="earning-display">Earned: ₹0.00</div>
-                    <form method="POST" style="margin-top:15px;">
+                    <form method="POST" style="margin-top:15px;" onsubmit="clearTaskTimer()">
                         <input type="hidden" name="action" value="complete_work">
                         <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
                         <input type="submit" value="Finish Work & Collect Earnings" style="background:#e74c3c;">
@@ -365,12 +365,29 @@ HTML_TEMPLATE = """
                 document.getElementById('upi-section').style.display = 'block';
             }
         }
-        let seconds = 0;
+
+        // LocalStorage based persistent timer implementation
         const ratePerHour = 75;
+        
+        function startTaskTimer(taskTitle) {
+            if (!localStorage.getItem('sab_kamao_seconds')) {
+                localStorage.setItem('sab_kamao_seconds', '0');
+            }
+        }
+
+        function clearTaskTimer() {
+            localStorage.removeItem('sab_kamao_seconds');
+        }
+
         function updateTimer() {
             const timerElem = document.getElementById('time-display');
             if (timerElem) {
+                let seconds = parseInt(localStorage.getItem('sab_kamao_seconds') || '0');
+                {% if session.get('active_task') %}
                 seconds++;
+                localStorage.setItem('sab_kamao_seconds', seconds);
+                {% endif %}
+                
                 document.getElementById('elapsed_seconds').value = seconds;
                 let hrs = Math.floor(seconds / 3600);
                 let mins = Math.floor((seconds % 3600) / 60);
