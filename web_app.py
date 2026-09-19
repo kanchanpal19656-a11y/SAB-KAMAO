@@ -42,43 +42,20 @@ SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  # Gmail App Password (16 digit)
 ADMIN_EMAIL = "rp619653@gmail.com"                
 
-def send_email_otp(to_email, otp_code):               
+def send_email_otp(to_email, otp_code):
     try:
-        subject = f"Sab Kamao - Your Login OTP is {otp_code}"                                               
-        body = f"""
-        <html>                                                
-        <body style="font-family: Arial, sans-serif; text-align: center; background: #f4f4f4; padding: 20px;">                                                    
-            <div style="background: white; max-width: 400px; margin: auto; padding: 20px; border-radius: 10px; border: 1px solid #ddd;">                              
-                <h2 style="color: #1c4d25;">Sab Kamao</h2>                                                          
-                <p style="color: #555;">Local Work. Simple Earnings.</p>                                            
-                <hr>
-                <p>Your Verification Code for Login is:</p>                                                         
-                <h1 style="color: #27ae60; font-size: 36px; letter-spacing: 2px;">{otp_code}</h1>
-                <p style="color: #888; font-size: 12px;">Do not share this OTP with anyone.</p>
-            </div>                                        
-        </body>                                       
-        </html>                                           
-        """
-        msg = MIMEMultipart()
-        msg['From'] = SENDER_EMAIL                        
-        msg['To'] = to_email                              
-        msg['Subject'] = subject                          
-        msg.attach(MIMEText(body, 'html'))
-
-        # Timeout ko 3 seconds rakha hai taaki worker hang na ho aur turant exception pakad le
-        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=3)
-        server.starttls()
-        server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.send_message(msg)
-        server.quit()                                     
+        # Agar aap chahte hain ki testing ke dauran email bhejne ki koshish hi na ho aur seedha fast login chale:
+        print(f"==========================================")
+        print(f"🔑 TEST LOGIN OTP FOR {to_email} : {otp_code}")
+        print(f"==========================================")
+        
+        # Agar aap chahte hain ki default OTP hamesha '1234' ho testing ke liye:
+        # (Aap ise apne hisab se rakh sakte hain)
         return True
-    except Exception as e:                                
-        print("SMTP Port Blocked / Timeout Error:", e)
-        # Fallback: Render logs me OTP print ho jayega taaki aap bina email ke bhi login kar sakein
-        print(f"==========================================")
-        print(f"🔑 RENDER DEBUG OTP FOR {to_email} : {otp_code}")
-        print(f"==========================================")
-        return True  # True return karne se login flow nahi rukega aur server crash nahi hoga
+        
+    except Exception as e:
+        print("OTP Error:", e)
+        return True
 
 def send_withdrawal_email(phone_or_email, amount, withdraw_type, details):                              
     try:                                                  
