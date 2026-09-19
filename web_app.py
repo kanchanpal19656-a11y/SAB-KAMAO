@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, session, redirect, url_for, flash
+from flask import Flask, render_template_string, request, session, redirect, url_for, flash, make_response
 import sqlite3
 import random
 import os
@@ -256,9 +256,17 @@ HTML_TEMPLATE = """
                     <a href="/" style="background:#27ae60; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-sync"></i> Refresh</a>
                 </div>
                 <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Aapki Location: <b>{{ user_loc_name }}</b></p>
-                {% if not open_tasks %}
-                    <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai. (Refresh karke check karein)</p>
+                
+                {% if active_task_info %}
+                    <div style="background:#fff3e0; border:1px solid #ffe0b2; padding:12px; border-radius:8px; margin-bottom:15px; text-align:center;">
+                        <p style="margin:0; color:#d84315; font-size:13px; font-weight:bold;">⚠️ Aapka ek task pehle se active/pending hai! Naya task lene ke liye pehle apna current task complete karein.</p>
+                    </div>
                 {% endif %}
+
+                {% if not open_tasks %}
+                    <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai.</p>
+                {% endif %}
+                
                 {% for task in open_tasks %}
                     <div style="border-bottom:1px solid #eee; padding:12px 0; display:flex; align-items:center;">
                         <div>
@@ -272,12 +280,17 @@ HTML_TEMPLATE = """
                             <b>{{ task[1] }}</b><br>
                             <small style="color:#555;">Owner: <b>{{ task[6] }}</b> | Mode: <b>{{ task[2] }}</b></small><br>
                             <small style="color:#e67e22;">📍 <b>{{ task[8] }}</b> ({{ "%.2f"|format(task[9]) }} KM away)</small>
-                            <form method="POST" style="margin-top:8px;" onsubmit="initTaskStart('{{ task[0] }}')">
-                                <input type="hidden" name="action" value="verify_task_otp">
-                                <input type="hidden" name="task_id" value="{{ task[0] }}">
-                                <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required style="padding:8px; font-size:13px;">
-                                <input type="submit" value="Start Work with OTP" style="padding:8px; font-size:13px;">
-                            </form>
+                            
+                            {% if active_task_info %}
+                                <button disabled style="background:#ccc; cursor:not-allowed; padding:8px; font-size:13px; margin-top:8px;">Task Locked (Complete Previous First)</button>
+                            {% else %}
+                                <form method="POST" style="margin-top:8px;" onsubmit="initTaskStart('{{ task[0] }}')">
+                                    <input type="hidden" name="action" value="verify_task_otp">
+                                    <input type="hidden" name="task_id" value="{{ task[0] }}">
+                                    <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required style="padding:8px; font-size:13px;">
+                                    <input type="submit" value="Start Work with OTP" style="padding:8px; font-size:13px;">
+                                </form>
+                            {% endif %}
                         </div>
                     </div>
                 {% endfor %}
@@ -329,7 +342,10 @@ HTML_TEMPLATE = """
             </div>
 
             <div class="card">
-                <h3 style="margin-top:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & History</h3>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h3 style="margin:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & History</h3>
+                    <a href="/download_pdf?type=owner" style="background:#3498db; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-download"></i> PDF</a>
+                </div>
                 {% if not my_tasks %}
                     <p style="color:#888; font-size:14px;">Aapne abhi tak koi task post nahi kiya hai.</p>
                 {% else %}
@@ -538,16 +554,19 @@ HTML_TEMPLATE = """
                 </form>
             </div>
 
-            <button onclick="toggleWorkHistory()" style="background:#2c3e50; margin-bottom:8px; font-size:14px; padding:9px;">📜 Work History</button>
+            <button onclick="toggleWorkHistory()" style="background:#2c3e50; margin-bottom:8px; font-size:14px; padding:9px;">📜 Work History & PDF</button>
             <div id="workHistorySection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:220px; overflow-y:auto;">
-                <h4 style="margin:0 0 8px 0; color:#1c4d25;">Your Completed Work History:</h4>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+                    <h4 style="margin:0; color:#1c4d25; font-size:13px;">Completed History:</h4>
+                    <a href="/download_pdf?type=worker" style="background:#3498db; color:#fff; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:11px; font-weight:bold;"><i class="fa-solid fa-download"></i> PDF Download</a>
+                </div>
                 {% if not work_history %}
                     <p style="font-size:12px; color:#888;">Abhi tak koi work history nahi hai.</p>
                 {% else %}
                     {% for wh in work_history %}
                         <div style="border-bottom:1px solid #e0e0e0; padding:8px 0; font-size:12px;">
                             <b>{{ wh[0] }}</b><br>
-                            <span style="color:#27ae60; font-weight:bold;">Amount Earned: ₹{{ wh[1] }}</span><br>
+                            <span style="color:#27ae60; font-weight:bold;">Earned: ₹{{ wh[1] }}</span><br>
                             <span style="color:#555;">Started: {{ wh[2] }}</span><br>
                             <span style="color:#555;">Finished: {{ wh[3] or 'In Progress' }}</span><br>
                             <span style="color:#666;">Status: <b>{{ wh[4] }}</b></span>
@@ -651,10 +670,9 @@ HTML_TEMPLATE = """
         const ratePerHour = 75;
 
         function initTaskStart(taskId) {
-            var key = 'sab_kamao_start_' + taskId;
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, Date.now().toString());
-            }
+            // Fresh start for new task
+            localStorage.removeItem('sab_kamao_start_' + taskId);
+            localStorage.setItem('sab_kamao_start_' + taskId, Date.now().toString());
         }
 
         function clearTaskTimer(taskId) {
@@ -854,17 +872,23 @@ def home():
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'verify_task_otp':
-            task_id = request.form.get('task_id')
-            input_otp = request.form.get('otp', '').strip()
-            c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
-            task = c.fetchone()
-            if task and str(task[0]).strip() == str(input_otp):
-                start_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
-                conn.commit()
-                msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
+            # Check if user already has an active task
+            c.execute("SELECT id FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
+            existing_active = c.fetchone()
+            if existing_active:
+                msg = "❌ Aapka ek task pehle se active hai! Naya task shuru nahi kar sakte."
             else:
-                msg = "❌ Galat OTP ya Task Pehle se active hai!"
+                task_id = request.form.get('task_id')
+                input_otp = request.form.get('otp', '').strip()
+                c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
+                task = c.fetchone()
+                if task and str(task[0]).strip() == str(input_otp):
+                    start_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
+                    conn.commit()
+                    msg = "🎉 OTP Verified! Work Started. Timer shalu ho gaya hai."
+                else:
+                    msg = "❌ Galat OTP ya Task Pehle se active hai!"
         elif action == 'worker_finish_work':
             task_id = request.form.get('task_id')
             total_time_seconds = float(request.form.get('elapsed_seconds', 0))
@@ -893,19 +917,18 @@ def home():
     user_lng = res[3] if res and res[3] else 77.5040
     user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
-    c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic, t.location_name FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
-    all_open_tasks = c.fetchall()
-    
-    open_tasks = []
-    for t in all_open_tasks:
-        t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name = t
-        dist = calculate_distance(user_lat, user_lng, t_lat, t_lng)
-        # 3.5 KM buffer to avoid precision issues
-        if dist <= 3.5: 
-            open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name, dist))
-
     c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
     active_task_info = c.fetchone()
+
+    open_tasks = []
+    if not active_task_info:
+        c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic, t.location_name FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
+        all_open_tasks = c.fetchall()
+        for t in all_open_tasks:
+            t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name = t
+            dist = calculate_distance(user_lat, user_lng, t_lat, t_lng)
+            if dist <= 3.5: 
+                open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name, dist))
 
     c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
     work_history = c.fetchall()
@@ -1116,6 +1139,54 @@ def withdraw():
     conn.close()
 
     return render_template_string(HTML_TEMPLATE, page='withdraw', phone=phone, balance=balance, profile_pic=profile_pic, total_withdrawn=total_withdrawn, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
+
+@app.route('/download_pdf', methods=['GET'])
+def download_pdf():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    phone = session.get('phone')
+    history_type = request.args.get('type', 'worker')
+    
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+    if history_type == 'owner':
+        c.execute("SELECT title, payment_method, status, start_time, finish_time, location_name FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
+        title_text = "Task Provider History Report"
+    else:
+        c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+        title_text = "Worker Earnings & History Report"
+    rows = c.fetchall()
+    conn.close()
+
+    # Generate plain text / HTML report that browser can save or print as PDF
+    html_content = f"""
+    <html>
+    <head><title>{title_text}</title></head>
+    <body style="font-family: Arial; padding: 20px;">
+        <h2>{title_text}</h2>
+        <p><b>User Account:</b> {phone}</p>
+        <p><b>Generated Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <hr>
+        <table border="1" cellpadding="8" cellspacing="0" style="width:100%; border-collapse:collapse; font-size:13px;">
+            <tr style="background:#f2f2f2;">
+                <th>Task Title</th>
+                <th>Details / Earnings</th>
+                <th>Start Time</th>
+                <th>Finish Time</th>
+                <th>Status</th>
+            </tr>
+    """
+    for r in rows:
+        html_content += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>"
+    html_content += """
+        </table>
+        <br><button onclick="window.print()" style="padding:10px 20px; background:#27ae60; color:#fff; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Print / Save as PDF</button>
+    </body>
+    </html>
+    """
+    response = make_response(html_content)
+    response.headers["Content-Type"] = "text/html"
+    return response
 
 if __name__ == '__main__':
     init_db()
