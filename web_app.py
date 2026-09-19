@@ -6,6 +6,7 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
+from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
 app.secret_key = 'sab_kamao_secret_key_123'
@@ -14,7 +15,7 @@ def init_db():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0)''')
+                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
@@ -29,6 +30,10 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN password TEXT")
     except:
         pass
 
@@ -53,16 +58,6 @@ def allowed_file(filename):
 SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  
 ADMIN_EMAIL = "rp619653@gmail.com"
-
-def send_email_otp(to_email, otp_code):
-    try:
-        print(f"==========================================")
-        print(f"🔑 LIVE SCREEN OTP FOR {to_email} : {otp_code}")
-        print(f"==========================================")
-        return otp_code
-    except Exception as e:
-        print("OTP Error:", e)
-        return otp_code
 
 def send_withdrawal_email(phone_or_email, amount, withdraw_type, details):
     try:
@@ -98,7 +93,7 @@ LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sab Kamao - Login</title>
+    <title>Sab Kamao - Login / Signup</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { box-sizing: border-box; }
@@ -116,10 +111,10 @@ LOGIN_TEMPLATE = """
         .logo-box { width: 100px; height: 100px; margin: 0 auto 10px auto; }
         h2 { color: #1c4d25; margin: 0 0 4px 0; font-size: 28px; font-weight: 800; }
         p.subtitle { color: #27ae60; margin: 0 0 22px 0; font-size: 14px; font-weight: 600; }
-        input[type=email], input[type=number], input[type=text], input[type=file], input[type=submit] {
+        input[type=email], input[type=password], input[type=text], input[type=file], input[type=submit] {
             width: 100%; padding: 12px; margin: 8px 0; border-radius: 10px; font-size: 14px;
         }
-        input[type=email], input[type=number], input[type=text] {
+        input[type=email], input[type=password], input[type=text] {
             border: 1.5px solid #27ae60; text-align: center; font-weight: bold; outline: none; background: #fdfdfd;
         }
         input[type=submit] { background: #1c4d25; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
@@ -146,7 +141,7 @@ LOGIN_TEMPLATE = """
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             {% for category, message in messages %}
-              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin: 10px 0; font-weight: bold; font-size: 15px; border: 1px solid #b3e5fc;">
+              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin: 10px 0; font-weight: bold; font-size: 14px; border: 1px solid #b3e5fc;">
                 {{ message }}
               </div>
             {% endfor %}
@@ -157,23 +152,14 @@ LOGIN_TEMPLATE = """
             <p style="color:#e74c3c; font-weight:bold; font-size:14px;">{{ msg }}</p>
         {% endif %}
 
-        {% if not otp_sent %}
-            <form method="POST" enctype="multipart/form-data">
-                <input type="hidden" name="step" value="send_otp">
-                <input type="email" name="user_id" placeholder="Enter Gmail Address" required>
-                <input type="text" name="ref_code_input" placeholder="Referral Code (Optional)" value="{{ request.args.get('ref', '') }}">
-                <label style="font-size:12px; color:#555; display:block; text-align:left; margin-top:5px;">Profile Picture (Optional):</label>
-                <input type="file" name="profile_pic" accept="image/*">
-                <input type="submit" value="Send OTP to Email">
-            </form>
-        {% else %}
-            <p style="color:#27ae60; font-weight:bold; font-size:14px;">📩 OTP Sent Successfully!</p>
-            <form method="POST">
-                <input type="hidden" name="step" value="verify_otp">
-                <input type="number" name="entered_otp" placeholder="Enter 4-Digit OTP" required>
-                <input type="submit" value="Verify OTP & Login">
-            </form>
-        {% endif %}
+        <form method="POST" enctype="multipart/form-data">
+            <input type="email" name="email" placeholder="Enter Valid Gmail Address" required>
+            <input type="password" name="password" placeholder="Enter Account Password" required>
+            <input type="text" name="ref_code_input" placeholder="Referral Code (Optional)" value="{{ request.args.get('ref', '') }}">
+            <label style="font-size:12px; color:#555; display:block; text-align:left; margin-top:5px;">Profile Picture (Optional):</label>
+            <input type="file" name="profile_pic" accept="image/*">
+            <input type="submit" value="Login / Signup">
+        </form>
     </div>
 </body>
 </html>
@@ -225,6 +211,16 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="container">
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% if messages %}
+            {% for category, message in messages %}
+              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-weight: bold; font-size: 14px; border: 1px solid #b3e5fc;">
+                {{ message }}
+              </div>
+            {% endfor %}
+          {% endif %}
+        {% endwith %}
+
         {% if msg %}
             <div class="card" style="color:#1c4d25; font-weight:bold; text-align:center;">{{ msg|safe }}</div>
         {% endif %}
@@ -385,7 +381,7 @@ HTML_TEMPLATE = """
     </div>
 
     <div id="profileModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:100000; justify-content:center; align-items:center;">
-        <div style="background:#fff; padding:20px; border-radius:15px; width:88%; max-width:360px; text-align:center; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
+        <div style="background:#fff; padding:20px; border-radius:15px; width:88%; max-width:360px; text-align:center; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;">
             <span onclick="closeProfileModal()" style="position:absolute; right:15px; top:10px; font-size:24px; cursor:pointer; font-weight:bold; color:#888;">&times;</span>
             {% if profile_pic %}
                 <img src="/static/uploads/{{ profile_pic }}" class="profile-avatar">
@@ -393,7 +389,7 @@ HTML_TEMPLATE = """
                 <div class="profile-avatar">👤</div>
             {% endif %}
             <h3 style="margin:5px 0; color:#1c4d25;">User Profile</h3>
-            <p style="margin:5px 0; color:#555; font-size:14px;"><b>ID:</b> {{ phone }}</p>
+            <p style="margin:5px 0; color:#555; font-size:14px; word-break:break-all;"><b>ID:</b> {{ phone }}</p>
             <p style="margin:5px 0 15px 0; color:#27ae60; font-weight:bold; font-size:16px;">Balance: ₹{{ balance }}</p>
 
             <button onclick="toggleEditProfile()" style="background:#3498db; margin-bottom:8px; font-size:14px; padding:9px;">✏️ Edit Profile Pic</button>
@@ -402,6 +398,17 @@ HTML_TEMPLATE = """
                     <label style="font-size:12px; font-weight:bold; display:block; text-align:left;">Choose New Photo:</label>
                     <input type="file" name="new_profile_pic" accept="image/*" required style="font-size:12px;">
                     <input type="submit" value="Upload & Save" style="background:#27ae60; padding:8px; font-size:13px; margin-top:5px;">
+                </form>
+            </div>
+
+            <button onclick="toggleChangePassword()" style="background:#e67e22; margin-bottom:8px; font-size:14px; padding:9px;">🔑 Change Password</button>
+            <div id="changePasswordSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left;">
+                <form method="POST" action="/change_password">
+                    <label style="font-size:11px; font-weight:bold;">Old Password:</label>
+                    <input type="password" name="old_password" placeholder="Enter old password" required style="font-size:13px; padding:8px; margin:4px 0 8px 0;">
+                    <label style="font-size:11px; font-weight:bold;">New Password:</label>
+                    <input type="password" name="new_password" placeholder="Enter new password" required style="font-size:13px; padding:8px; margin:4px 0 8px 0;">
+                    <input type="submit" value="Update Password" style="background:#e67e22; padding:8px; font-size:13px; margin-top:5px;">
                 </form>
             </div>
 
@@ -416,6 +423,10 @@ HTML_TEMPLATE = """
         function closeProfileModal() { document.getElementById('profileModal').style.display = 'none'; }
         function toggleEditProfile() {
             var elem = document.getElementById('editProfileSection');
+            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
+        }
+        function toggleChangePassword() {
+            var elem = document.getElementById('changePasswordSection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
         }
         function toggleWithdrawFields() {
@@ -475,85 +486,81 @@ HTML_TEMPLATE = """
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     msg = ""
-    otp_sent = False
     ref_code_input = request.args.get('ref', '').strip()
     
     if request.method == 'POST':
-        step = request.form.get('step')
-        if step == 'send_otp':
-            user_id = request.form.get('user_id', '').strip().lower()
-            ref_code_input = request.form.get('ref_code_input', '').strip()
-            profile_pic_filename = ''
-            if 'profile_pic' in request.files:
-                file = request.files['profile_pic']
-                if file and allowed_file(file.filename):
-                    filename = secure_filename(f"{user_id}_{file.filename}")
-                    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                    profile_pic_filename = filename
+        email = request.form.get('email', '').strip().lower()
+        password = request.form.get('password', '').strip()
+        ref_code_input = request.form.get('ref_code_input', '').strip()
+        
+        profile_pic_filename = ''
+        if 'profile_pic' in request.files:
+            file = request.files['profile_pic']
+            if file and allowed_file(file.filename):
+                filename = secure_filename(f"{email}_{file.filename}")
+                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                profile_pic_filename = filename
 
-            if "@" in user_id and "." in user_id:
-                gen_otp = str(random.randint(1000, 9999))
-                session['temp_user'] = user_id
-                session['temp_login_otp'] = gen_otp
-                session['temp_profile_pic'] = profile_pic_filename
-                session['temp_ref_code'] = ref_code_input
-                send_email_otp(user_id, gen_otp)
-                flash(f"🔑 Aapka Test OTP yeh raha: {gen_otp}", "success")
-                otp_sent = True
-            else:
-                msg = "❌ Kripya sahi Gmail address dalein."
-        elif step == 'verify_otp':
-            entered_otp = request.form.get('entered_otp', '').strip()
-            correct_otp = session.get('temp_login_otp')
-            user_id = session.get('temp_user')
-            profile_pic = session.get('temp_profile_pic', '')
-            ref_code = session.get('temp_ref_code', '')
+        if "@" in email and "." in email and len(password) > 0:
+            conn = sqlite3.connect('sab_kamao.db')
+            c = conn.cursor()
+            c.execute('SELECT phone, password, referral_code FROM users WHERE phone = ?', (email,))
+            row = c.fetchone()
+            
+            my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
 
-            if entered_otp and entered_otp == correct_otp:
-                session['phone'] = user_id
-                session['logged_in'] = True
-                session.pop('temp_login_otp', None)
-                session.pop('temp_user', None)
-                session.pop('temp_profile_pic', None)
-                session.pop('temp_ref_code', None)
+            if not row:
+                # New Registration (Signup)
+                hashed_pw = generate_password_hash(password)
+                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password) VALUES (?, 0.0, ?, ?, ?)', 
+                            (email, profile_pic_filename, my_unique_ref, hashed_pw))
+                conn.commit()
 
-                conn = sqlite3.connect('sab_kamao.db')
-                c = conn.cursor()
-                c.execute('SELECT phone, referral_code FROM users WHERE phone = ?', (user_id,))
-                row = c.fetchone()
+                # Handle referral logic if referred
+                if ref_code_input:
+                    c.execute('SELECT phone FROM users WHERE referral_code = ?', (ref_code_input,))
+                    referrer = c.fetchone()
+                    if referrer and referrer[0] != email:
+                        referrer_phone = referrer[0]
+                        c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
+                        c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
+                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})"))
+                        c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status) VALUES (?, ?, ?)',
+                                    (referrer_phone, email, 'REGISTERED'))
+                        conn.commit()
                 
-                my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
-
-                if not row:
-                    c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code) VALUES (?, 0.0, ?, ?)', (user_id, profile_pic, my_unique_ref))
-                    conn.commit()
-
-                    if ref_code:
-                        c.execute('SELECT phone FROM users WHERE referral_code = ?', (ref_code,))
-                        referrer = c.fetchone()
-                        if referrer and referrer[0] != user_id:
-                            referrer_phone = referrer[0]
-                            c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
-                            c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                                        (referrer_phone, 100.0, f"Referral Bonus (User: {user_id})"))
-                            c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status) VALUES (?, ?, ?)',
-                                        (referrer_phone, user_id, 'REGISTERED'))
-                            conn.commit()
-                else:
-                    # Ensure existing user has a referral code if missing
-                    if not row[1]:
-                        c.execute('UPDATE users SET referral_code = ? WHERE phone = ?', (my_unique_ref, user_id))
-                        conn.commit()
-                    if profile_pic:
-                        c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic, user_id))
-                        conn.commit()
+                session['phone'] = email
+                session['logged_in'] = True
                 conn.close()
+                flash("🎉 Account Successfully Created & Logged In!", "success")
                 return redirect(url_for('home'))
             else:
-                otp_sent = True
-                msg = "❌ Galat OTP! Screen par ya Render Logs par aaya OTP dalein."
+                # Existing User Login
+                stored_hash = row[1]
+                # Fallback if old user didn't have password stored
+                if not stored_hash:
+                    c.execute('UPDATE users SET password = ? WHERE phone = ?', (generate_password_hash(password), email))
+                    conn.commit()
+                    stored_hash = generate_password_hash(password)
 
-    return render_template_string(LOGIN_TEMPLATE, msg=msg, otp_sent=otp_sent, ref_code_input=ref_code_input)
+                if check_password_hash(stored_hash, password):
+                    session['phone'] = email
+                    session['logged_in'] = True
+                    if profile_pic_filename:
+                        c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic_filename, email))
+                        conn.commit()
+                    if not row[2]:
+                        c.execute('UPDATE users SET referral_code = ? WHERE phone = ?', (my_unique_ref, email))
+                        conn.commit()
+                    conn.close()
+                    return redirect(url_for('home'))
+                else:
+                    conn.close()
+                    msg = "❌ Galat Password! Kripya sahi password dalein."
+        else:
+            msg = "❌ Kripya valid Gmail address aur password dalein."
+
+    return render_template_string(LOGIN_TEMPLATE, msg=msg, ref_code_input=ref_code_input)
 
 @app.route('/update_profile', methods=['POST'])
 def update_profile():
@@ -570,7 +577,38 @@ def update_profile():
             c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (filename, phone))
             conn.commit()
             conn.close()
+            flash("✅ Profile picture updated successfully!", "success")
     return redirect(request.referrer or url_for('home'))
+
+@app.route('/change_password', methods=['POST'])
+def change_password():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    phone = session.get('phone')
+    old_password = request.form.get('old_password', '').strip()
+    new_password = request.form.get('new_password', '').strip()
+
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+    c.execute('SELECT password FROM users WHERE phone = ?', (phone,))
+    row = c.fetchone()
+    conn.close()
+
+    if row and row[0] and check_password_hash(row[0], old_password):
+        if len(new_password) > 0:
+            new_hashed = generate_password_hash(new_password)
+            conn = sqlite3.connect('sab_kamao.db')
+            c = conn.cursor()
+            c.execute('UPDATE users SET password = ? WHERE phone = ?', (new_hashed, phone))
+            conn.commit()
+            conn.close()
+            flash("✅ Password successfully changed!", "success")
+        else:
+            flash("❌ Naya password khali nahi ho sakta.", "danger")
+    else:
+        flash("❌ Purana password galat hai!", "danger")
+
+    return redirect(url_for('home'))
 
 @app.route('/logout')
 def logout():
