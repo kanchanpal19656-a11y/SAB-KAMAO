@@ -251,10 +251,13 @@ HTML_TEMPLATE = """
 
         {% if page == 'home' %}
             <div class="card">
-                <h3 style="margin-top:0; color:#1c4d25;">💼 Available Tasks Within 3 KM (Kam Lo)</h3>
-                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Aapki Location: <b>{{ user_loc_name }}</b> (3 KM Range)</p>
+                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                    <h3 style="margin:0; color:#1c4d25;">💼 Available Tasks (3 KM Range)</h3>
+                    <a href="/" style="background:#27ae60; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-sync"></i> Refresh</a>
+                </div>
+                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Aapki Location: <b>{{ user_loc_name }}</b></p>
                 {% if not open_tasks %}
-                    <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai.</p>
+                    <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai. (Refresh karke check karein)</p>
                 {% endif %}
                 {% for task in open_tasks %}
                     <div style="border-bottom:1px solid #eee; padding:12px 0; display:flex; align-items:center;">
@@ -897,7 +900,8 @@ def home():
     for t in all_open_tasks:
         t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name = t
         dist = calculate_distance(user_lat, user_lng, t_lat, t_lng)
-        if dist <= 3.0: 
+        # 3.5 KM buffer to avoid precision issues
+        if dist <= 3.5: 
             open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name, dist))
 
     c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
@@ -1005,7 +1009,6 @@ def reels():
     user_lng = res[3] if res and res[3] else 77.5040
     user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
-    # Fetch all public reels with uploader profile pics
     c.execute("SELECT r.id, r.uploader_phone, r.caption, r.video_filename, r.timestamp, u.profile_pic, r.likes FROM reels r JOIN users u ON r.uploader_phone = u.phone ORDER BY r.id DESC")
     all_reels = c.fetchall()
 
