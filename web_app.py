@@ -17,22 +17,22 @@ def init_db():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040)''')
+                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida')''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', amount_earned REAL DEFAULT 0.0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
-    # Safe migrations
-    for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040")]:
+    # Safe migrations for existing databases
+    for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {c_type}")
         except:
             pass
             
-    for col, c_type in [("worker_phone", "TEXT DEFAULT ''"), ("start_time", "TEXT DEFAULT ''"), ("completion_otp", "TEXT DEFAULT ''"), ("finish_time", "TEXT DEFAULT ''"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040")]:
+    for col, c_type in [("worker_phone", "TEXT DEFAULT ''"), ("start_time", "TEXT DEFAULT ''"), ("completion_otp", "TEXT DEFAULT ''"), ("finish_time", "TEXT DEFAULT ''"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("amount_earned", "REAL DEFAULT 0.0")]:
         try:
             c.execute(f"ALTER TABLE tasks ADD COLUMN {col} {c_type}")
         except:
@@ -58,9 +58,9 @@ SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  
 ADMIN_EMAIL = "rp619653@gmail.com"
 
-# Haversine formula to calculate distance in KM between two lat/lng points
+# Haversine formula to calculate distance in KM
 def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0 # Earth radius in KM
+    R = 6371.0
     dlat = math.radians(lat2 - lat1)
     dlon = math.radians(lon2 - lon1)
     a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
@@ -240,7 +240,7 @@ HTML_TEMPLATE = """
         {% if page == 'home' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#1c4d25;">💼 Available Tasks Within 3 KM (Kam Lo)</h3>
-                <p style="font-size:12px; color:#555; margin-bottom:15px;">Aapki current location ke 3 km daayre ke andar ke task yahan dikh rahe hain.</p>
+                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Location: <b>{{ user_loc_name }}</b> (3 KM Range)</p>
                 {% if not open_tasks %}
                     <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai.</p>
                 {% endif %}
@@ -256,7 +256,7 @@ HTML_TEMPLATE = """
                         <div style="flex:1;">
                             <b>{{ task[1] }}</b><br>
                             <small style="color:#555;">Owner: <b>{{ task[6] }}</b> | Mode: <b>{{ task[2] }}</b></small><br>
-                            <small style="color:#27ae60; font-weight:bold;">Distance: {{ "%.2f"|format(task[8]) }} KM away</small>
+                            <small style="color:#e67e22;">📍 <b>{{ task[8] }}</b> ({{ "%.2f"|format(task[9]) }} KM away)</small>
                             <form method="POST" style="margin-top:8px;" onsubmit="initTaskStart('{{ task[0] }}')">
                                 <input type="hidden" name="action" value="verify_task_otp">
                                 <input type="hidden" name="task_id" value="{{ task[0] }}">
@@ -276,7 +276,7 @@ HTML_TEMPLATE = """
                     <div style="text-align:center; font-size:20px; color:#27ae60; font-weight:bold;" id="earning-display">Earned: ₹0.00</div>
                     
                     {% if not active_task_info[3] %}
-                        <form method="POST" style="margin-top:15px;" onsubmit="setFinishTimestamp()">
+                        <form method="POST" style="margin-top:15px;" onsubmit="clearTaskTimer('{{ active_task_info[0] }}')">
                             <input type="hidden" name="action" value="worker_finish_work">
                             <input type="hidden" name="task_id" value="{{ active_task_info[0] }}">
                             <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
@@ -307,12 +307,13 @@ HTML_TEMPLATE = """
                         <option value="Bank Transfer">Bank Transfer</option>
                     </select>
                     
-                    <label style="font-weight:600; font-size:14px; margin-top:5px; display:block;">Task Location (Lat, Lng):</label>
-                    <div style="display:flex; gap:10px;">
-                        <input type="text" id="task_lat" name="task_lat" value="{{ user_lat }}" placeholder="Latitude" required style="margin-top:4px;">
-                        <input type="text" id="task_lng" name="task_lng" value="{{ user_lng }}" placeholder="Longitude" required style="margin-top:4px;">
-                    </div>
-                    <button type="button" onclick="getTaskLocation()" style="background:#3498db; padding:8px; font-size:13px; margin-top:4px;">📍 Use My Live Location</button>
+                    <label style="font-weight:600; font-size:14px; margin-top:5px; display:block;">Area / Location Name:</label>
+                    <input type="text" id="task_location_name" name="task_location_name" value="{{ user_loc_name }}" placeholder="e.g. Surajpur, Greater Noida" required>
+                    
+                    <input type="hidden" id="task_lat" name="task_lat" value="{{ user_lat }}">
+                    <input type="hidden" id="task_lng" name="task_lng" value="{{ user_lng }}">
+                    
+                    <button type="button" onclick="getTaskLocation()" style="background:#3498db; padding:8px; font-size:13px; margin-top:4px;">📍 Get Live Location & Address</button>
 
                     <input type="submit" value="Post Task & Generate OTP" style="margin-top:10px;">
                 </form>
@@ -327,6 +328,7 @@ HTML_TEMPLATE = """
                         <div style="border-bottom:1px solid #eee; padding:12px 0;">
                             <b>{{ t[1] }}</b><br>
                             <small style="color:#555;">Mode: <b>{{ t[2] }}</b> | Start OTP: <b style="color:#e67e22;">{{ t[3] }}</b></small><br>
+                            <small style="color:#555;">📍 Location: <b>{{ t[7] }}</b></small><br>
                             <small style="color:#666;">Posted Time: {{ t[5] }}</small><br>
                             <small style="color:#666;">Status: <b>{{ t[4] }}</b></small>
                             {% if t[4] == 'COMPLETED' %}
@@ -473,14 +475,33 @@ HTML_TEMPLATE = """
                 </form>
             </div>
 
+            <!-- Work History Section -->
+            <button onclick="toggleWorkHistory()" style="background:#2c3e50; margin-bottom:8px; font-size:14px; padding:9px;">📜 Work History</button>
+            <div id="workHistorySection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:220px; overflow-y:auto;">
+                <h4 style="margin:0 0 8px 0; color:#1c4d25;">Your Completed Work History:</h4>
+                {% if not work_history %}
+                    <p style="font-size:12px; color:#888;">Abhi tak koi work history nahi hai.</p>
+                {% else %}
+                    {% for wh in work_history %}
+                        <div style="border-bottom:1px solid #e0e0e0; padding:8px 0; font-size:12px;">
+                            <b>{{ wh[0] }}</b><br>
+                            <span style="color:#27ae60; font-weight:bold;">Amount Earned: ₹{{ wh[1] }}</span><br>
+                            <span style="color:#555;">Started: {{ wh[2] }}</span><br>
+                            <span style="color:#555;">Finished: {{ wh[3] or 'In Progress' }}</span><br>
+                            <span style="color:#666;">Status: <b>{{ wh[4] }}</b></span>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
             <!-- Location Update Section -->
-            <button onclick="toggleLocationEdit()" style="background:#16a085; margin-bottom:8px; font-size:14px; padding:9px;">📍 Update Location (Lat/Lng)</button>
+            <button onclick="toggleLocationEdit()" style="background:#16a085; margin-bottom:8px; font-size:14px; padding:9px;">📍 Location Settings</button>
             <div id="locationEditSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left;">
                 <form method="POST" action="/update_location">
-                    <label style="font-size:11px; font-weight:bold;">Latitude:</label>
-                    <input type="text" name="lat" id="prof_lat" value="{{ user_lat }}" required style="font-size:13px; padding:8px; margin:2px 0 6px 0;">
-                    <label style="font-size:11px; font-weight:bold;">Longitude:</label>
-                    <input type="text" name="lng" id="prof_lng" value="{{ user_lng }}" required style="font-size:13px; padding:8px; margin:2px 0 6px 0;">
+                    <label style="font-size:11px; font-weight:bold;">Area / Address Name:</label>
+                    <input type="text" name="location_name" id="prof_loc_name" value="{{ user_loc_name }}" required style="font-size:13px; padding:8px; margin:2px 0 6px 0;">
+                    <input type="hidden" name="lat" id="prof_lat" value="{{ user_lat }}">
+                    <input type="hidden" name="lng" id="prof_lng" value="{{ user_lng }}">
                     <button type="button" onclick="getProfileLocation()" style="background:#3498db; padding:6px; font-size:12px; margin-bottom:6px;">📡 Get Live Location</button>
                     <input type="submit" value="Save Location" style="background:#16a085; padding:8px; font-size:13px;">
                 </form>
@@ -508,6 +529,10 @@ HTML_TEMPLATE = """
         function closeProfileModal() { document.getElementById('profileModal').style.display = 'none'; }
         function toggleEditProfile() {
             var elem = document.getElementById('editProfileSection');
+            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
+        }
+        function toggleWorkHistory() {
+            var elem = document.getElementById('workHistorySection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
         }
         function toggleLocationEdit() {
@@ -541,50 +566,74 @@ HTML_TEMPLATE = """
         function getTaskLocation() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(function(position) {
-                    document.getElementById('task_lat').value = position.coords.latitude;
-                    document.getElementById('task_lng').value = position.coords.longitude;
-                    alert("Location fetched successfully!");
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    document.getElementById('task_lat').value = lat;
+                    document.getElementById('task_lng').value = lng;
+                    
+                    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng)
+                        .then(response => response.json())
+                        .then(data => {
+                            if(data && data.address) {
+                                var name = data.address.suburb || data.address.neighbourhood || data.address.city || data.address.town || data.display_name;
+                                document.getElementById('task_location_name').value = name;
+                            }
+                        }).catch(e => console.log(e));
+
+                    alert("Location & Address fetched!");
                 }, function(error) {
-                    alert("Unable to retrieve your location. Please enter manually.");
+                    alert("Unable to retrieve live location.");
                 });
-            } else {
-                alert("Geolocation is not supported by your browser.");
             }
         }
 
         function getProfileLocation() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(function(position) {
-                    document.getElementById('prof_lat').value = position.coords.latitude;
-                    document.getElementById('prof_lng').value = position.coords.longitude;
-                    alert("Location fetched successfully!");
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    document.getElementById('prof_lat').value = lat;
+                    document.getElementById('prof_lng').value = lng;
+                    
+                    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng)
+                        .then(response => response.json())
+                        .then(data => {
+                            if(data && data.address) {
+                                var name = data.address.suburb || data.address.neighbourhood || data.address.city || data.address.town || data.display_name;
+                                document.getElementById('prof_loc_name').value = name;
+                            }
+                        }).catch(e => console.log(e));
+
+                    alert("Location & Address fetched!");
                 }, function(error) {
-                    alert("Unable to retrieve your location.");
+                    alert("Unable to retrieve live location.");
                 });
-            } else {
-                alert("Geolocation not supported.");
             }
         }
 
         const ratePerHour = 75;
 
         function initTaskStart(taskId) {
-            if (!localStorage.getItem('sab_kamao_start_time')) {
-                localStorage.setItem('sab_kamao_start_time', Date.now().toString());
-                localStorage.setItem('sab_kamao_task_id', taskId);
+            var key = 'sab_kamao_start_' + taskId;
+            if (!localStorage.getItem(key)) {
+                localStorage.setItem(key, Date.now().toString());
             }
         }
 
-        function setFinishTimestamp() {}
+        function clearTaskTimer(taskId) {
+            localStorage.removeItem('sab_kamao_start_' + taskId);
+        }
 
         function updateTimer() {
             const timerElem = document.getElementById('time-display');
             if (timerElem) {
                 {% if active_task_info %}
-                    let startTime = localStorage.getItem('sab_kamao_start_time');
+                    var activeId = "{{ active_task_info[0] }}";
+                    var key = 'sab_kamao_start_' + activeId;
+                    let startTime = localStorage.getItem(key);
                     if (!startTime) {
                         startTime = Date.now().toString();
-                        localStorage.setItem('sab_kamao_start_time', startTime);
+                        localStorage.setItem(key, startTime);
                     }
                     let now = Date.now();
                     let seconds = Math.floor((now - parseInt(startTime)) / 1000);
@@ -598,9 +647,6 @@ HTML_TEMPLATE = """
                     timerElem.innerText = formattedTime;
                     let currentEarning = ((seconds / 3600) * ratePerHour).toFixed(2);
                     document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
-                {% else %}
-                    localStorage.removeItem('sab_kamao_start_time');
-                    localStorage.removeItem('sab_kamao_task_id');
                 {% endif %}
             }
         }
@@ -639,8 +685,8 @@ def login():
 
             if not row:
                 hashed_pw = generate_password_hash(password)
-                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password) VALUES (?, 0.0, ?, ?, ?)', 
-                            (email, profile_pic_filename, my_unique_ref, hashed_pw))
+                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password, location_name) VALUES (?, 0.0, ?, ?, ?, ?)', 
+                            (email, profile_pic_filename, my_unique_ref, hashed_pw, 'Greater Noida'))
                 conn.commit()
 
                 if ref_code_input:
@@ -710,11 +756,12 @@ def update_location():
         return redirect(url_for('login'))
     phone = session.get('phone')
     try:
+        location_name = request.form.get('location_name', 'Greater Noida').strip()
         lat = float(request.form.get('lat', 28.4744))
         lng = float(request.form.get('lng', 77.5040))
         conn = sqlite3.connect('sab_kamao.db')
         c = conn.cursor()
-        c.execute('UPDATE users SET lat = ?, lng = ? WHERE phone = ?', (lat, lng, phone))
+        c.execute('UPDATE users SET lat = ?, lng = ?, location_name = ? WHERE phone = ?', (lat, lng, location_name, phone))
         conn.commit()
         conn.close()
         flash("✅ Location successfully updated!", "success")
@@ -792,39 +839,44 @@ def home():
             comp_otp = str(random.randint(1000, 9999))
             finish_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             
-            c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ? WHERE id = ? AND worker_phone = ?", 
-                        (comp_otp, finish_dt, task_id, phone))
+            c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ?, amount_earned = ? WHERE id = ? AND worker_phone = ?", 
+                        (comp_otp, finish_dt, total_earned, task_id, phone))
             
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
             c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                        (phone, total_earned, "Work Earned (₹75/hr)"))
+                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)"))
             conn.commit()
             msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye. Ab Kam Dene Wale (Owner) ko apna Completion OTP dein taaki wo task final close kar sake."
 
-    c.execute("SELECT balance, profile_pic, lat, lng FROM users WHERE phone=?", (phone,))
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
     balance = res[0] if res else 0.0
     profile_pic = res[1] if res else ''
     user_lat = res[2] if res and res[2] else 28.4744
     user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
     # Fetch OPEN tasks and filter within 3 KM range
-    c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
+    c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic, t.location_name FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
     all_open_tasks = c.fetchall()
     
     open_tasks = []
     for t in all_open_tasks:
-        t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp = t
+        t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name = t
         dist = calculate_distance(user_lat, user_lng, t_lat, t_lng)
-        if dist <= 3.0: # Within 3 KM range
-            open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, dist))
+        if dist <= 3.0: 
+            open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name, dist))
 
-    c.execute("SELECT id, title, status, completion_otp FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
+    c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
     active_task_info = c.fetchone()
+
+    # Work History for Profile
+    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+    work_history = c.fetchall()
 
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, active_task_info=active_task_info, user_lat=user_lat, user_lng=user_lng, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, active_task_info=active_task_info, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
 
 @app.route('/kam_do', methods=['GET', 'POST'])
 def kam_do():
@@ -840,6 +892,7 @@ def kam_do():
         if action == 'create_task':
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
+            task_loc_name = request.form.get('task_location_name', 'Greater Noida').strip()
             try:
                 t_lat = float(request.form.get('task_lat', 28.4744))
                 t_lng = float(request.form.get('task_lng', 77.5040))
@@ -848,8 +901,8 @@ def kam_do():
 
             gen_otp = str(random.randint(1000, 9999))
             post_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time, lat, lng) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?)",
-                        (phone, title, pay_method, gen_otp, post_dt, t_lat, t_lng))
+            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time, lat, lng, location_name) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)",
+                        (phone, title, pay_method, gen_otp, post_dt, t_lat, t_lng, task_loc_name))
             conn.commit()
             msg = f"✅ Task Posted! OTP: <b style='font-size:22px; color:#e67e22;'>{gen_otp}</b> (Ye OTP kaam karne wale ko dein)"
         elif action == 'owner_verify_completion':
@@ -864,18 +917,23 @@ def kam_do():
             else:
                 msg = "❌ Galat Completion OTP!"
 
-    c.execute("SELECT balance, profile_pic, lat, lng FROM users WHERE phone=?", (phone,))
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
     balance = res[0] if res else 0.0
     profile_pic = res[1] if res else ''
     user_lat = res[2] if res and res[2] else 28.4744
     user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
-    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
+    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time, location_name FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
     my_tasks = c.fetchall()
+
+    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+    work_history = c.fetchall()
+
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, my_tasks=my_tasks, user_lat=user_lat, user_lng=user_lng, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, my_tasks=my_tasks, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
 
 @app.route('/refer', methods=['GET'])
 def refer():
@@ -885,17 +943,24 @@ def refer():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
-    c.execute("SELECT balance, profile_pic, referral_code FROM users WHERE phone=?", (phone,))
+    c.execute("SELECT balance, profile_pic, referral_code, lat, lng, location_name FROM users WHERE phone=?", (phone,))
     user = c.fetchone()
     balance = user[0] if user else 0.0
     profile_pic = user[1] if user else ''
     ref_code = user[2] if user and user[2] else 'REF123'
+    user_lat = user[3] if user and user[3] else 28.4744
+    user_lng = user[4] if user and user[4] else 77.5040
+    user_loc_name = user[5] if user and user[5] else 'Greater Noida'
 
     c.execute("SELECT referred_phone, timestamp, status FROM referrals WHERE referrer_phone = ? ORDER BY id DESC", (phone,))
     refer_history = c.fetchall()
+
+    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+    work_history = c.fetchall()
+
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='refer', phone=phone, balance=balance, profile_pic=profile_pic, ref_code=ref_code, refer_history=refer_history)
+    return render_template_string(HTML_TEMPLATE, page='refer', phone=phone, balance=balance, profile_pic=profile_pic, ref_code=ref_code, refer_history=refer_history, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history)
 
 @app.route('/withdraw', methods=['GET', 'POST'])
 def withdraw():
@@ -949,17 +1014,24 @@ def withdraw():
                         c.execute("UPDATE referrals SET milestone_paid = 1, status = 'MILESTONE_REACHED' WHERE referred_phone = ?", (phone,))
                         conn.commit()
 
-                send_withdrawal_email(phone, amount, withdraw_type, details_src=details_str)
+                send_withdrawal_email(phone, amount, withdraw_type, details_str)
                 msg = f"✅ ₹{amount} Withdrawal Request Submitted!"
 
-    c.execute("SELECT balance, profile_pic, total_withdrawn FROM users WHERE phone=?", (phone,))
+    c.execute("SELECT balance, profile_pic, total_withdrawn, lat, lng, location_name FROM users WHERE phone=?", (phone,))
     res = c.fetchone()
     balance = res[0] if res else 0.0
     profile_pic = res[1] if res else ''
     total_withdrawn = res[2] if res else 0.0
+    user_lat = res[3] if res and res[3] else 28.4744
+    user_lng = res[4] if res and res[4] else 77.5040
+    user_loc_name = res[5] if res and res[5] else 'Greater Noida'
+
+    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+    work_history = c.fetchall()
+
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='withdraw', phone=phone, balance=balance, profile_pic=profile_pic, total_withdrawn=total_withdrawn, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='withdraw', phone=phone, balance=balance, profile_pic=profile_pic, total_withdrawn=total_withdrawn, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
 
 if __name__ == '__main__':
     init_db()
