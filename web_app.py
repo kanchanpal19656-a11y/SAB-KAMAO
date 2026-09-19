@@ -25,7 +25,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
-    # Safe migrations for existing databases
     for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {c_type}")
@@ -58,7 +57,6 @@ SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  
 ADMIN_EMAIL = "rp619653@gmail.com"
 
-# Haversine formula to calculate distance in KM
 def calculate_distance(lat1, lon1, lat2, lon2):
     R = 6371.0
     dlat = math.radians(lat2 - lat1)
@@ -240,7 +238,7 @@ HTML_TEMPLATE = """
         {% if page == 'home' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#1c4d25;">💼 Available Tasks Within 3 KM (Kam Lo)</h3>
-                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Location: <b>{{ user_loc_name }}</b> (3 KM Range)</p>
+                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Aapki Location: <b>{{ user_loc_name }}</b> (3 KM Range)</p>
                 {% if not open_tasks %}
                     <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai.</p>
                 {% endif %}
@@ -296,6 +294,9 @@ HTML_TEMPLATE = """
         {% if page == 'kam_do' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#1c4d25;">➕ Post a New Task (Kam Do)</h3>
+                <div style="background:#f9fdfa; border:1px solid #27ae60; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px; color:#1c4d25;">
+                    📍 Task Location (Aapki Profile Location): <b>{{ user_loc_name }}</b>
+                </div>
                 <form method="POST">
                     <input type="hidden" name="action" value="create_task">
                     <label style="font-weight:600; font-size:14px;">Task Description:</label>
@@ -306,15 +307,6 @@ HTML_TEMPLATE = """
                         <option value="UPI Transfer">UPI Transfer</option>
                         <option value="Bank Transfer">Bank Transfer</option>
                     </select>
-                    
-                    <label style="font-weight:600; font-size:14px; margin-top:5px; display:block;">Area / Location Name:</label>
-                    <input type="text" id="task_location_name" name="task_location_name" value="{{ user_loc_name }}" placeholder="e.g. Surajpur, Greater Noida" required>
-                    
-                    <input type="hidden" id="task_lat" name="task_lat" value="{{ user_lat }}">
-                    <input type="hidden" id="task_lng" name="task_lng" value="{{ user_lng }}">
-                    
-                    <button type="button" onclick="getTaskLocation()" style="background:#3498db; padding:8px; font-size:13px; margin-top:4px;">📍 Get Live Location & Address</button>
-
                     <input type="submit" value="Post Task & Generate OTP" style="margin-top:10px;">
                 </form>
             </div>
@@ -475,7 +467,6 @@ HTML_TEMPLATE = """
                 </form>
             </div>
 
-            <!-- Work History Section -->
             <button onclick="toggleWorkHistory()" style="background:#2c3e50; margin-bottom:8px; font-size:14px; padding:9px;">📜 Work History</button>
             <div id="workHistorySection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:220px; overflow-y:auto;">
                 <h4 style="margin:0 0 8px 0; color:#1c4d25;">Your Completed Work History:</h4>
@@ -494,7 +485,6 @@ HTML_TEMPLATE = """
                 {% endif %}
             </div>
 
-            <!-- Location Update Section -->
             <button onclick="toggleLocationEdit()" style="background:#16a085; margin-bottom:8px; font-size:14px; padding:9px;">📍 Location Settings</button>
             <div id="locationEditSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left;">
                 <form method="POST" action="/update_location">
@@ -561,30 +551,6 @@ HTML_TEMPLATE = """
             copyText.setSelectionRange(0, 99999);
             navigator.clipboard.writeText(copyText.value);
             alert("Referral link copied to clipboard!");
-        }
-
-        function getTaskLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(function(position) {
-                    var lat = position.coords.latitude;
-                    var lng = position.coords.longitude;
-                    document.getElementById('task_lat').value = lat;
-                    document.getElementById('task_lng').value = lng;
-                    
-                    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng)
-                        .then(response => response.json())
-                        .then(data => {
-                            if(data && data.address) {
-                                var name = data.address.suburb || data.address.neighbourhood || data.address.city || data.address.town || data.display_name;
-                                document.getElementById('task_location_name').value = name;
-                            }
-                        }).catch(e => console.log(e));
-
-                    alert("Location & Address fetched!");
-                }, function(error) {
-                    alert("Unable to retrieve live location.");
-                });
-            }
         }
 
         function getProfileLocation() {
@@ -856,7 +822,6 @@ def home():
     user_lng = res[3] if res and res[3] else 77.5040
     user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
-    # Fetch OPEN tasks and filter within 3 KM range
     c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic, t.location_name FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
     all_open_tasks = c.fetchall()
     
@@ -870,7 +835,6 @@ def home():
     c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
     active_task_info = c.fetchone()
 
-    # Work History for Profile
     c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
     work_history = c.fetchall()
 
@@ -892,12 +856,13 @@ def kam_do():
         if action == 'create_task':
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
-            task_loc_name = request.form.get('task_location_name', 'Greater Noida').strip()
-            try:
-                t_lat = float(request.form.get('task_lat', 28.4744))
-                t_lng = float(request.form.get('task_lng', 77.5040))
-            except:
-                t_lat, t_lng = 28.4744, 77.5040
+            
+            # Fetch strictly verified profile location and coordinates of the task provider
+            c.execute("SELECT lat, lng, location_name FROM users WHERE phone = ?", (phone,))
+            u_data = c.fetchone()
+            t_lat = u_data[0] if u_data else 28.4744
+            t_lng = u_data[1] if u_data else 77.5040
+            task_loc_name = u_data[2] if u_data else 'Greater Noida'
 
             gen_otp = str(random.randint(1000, 9999))
             post_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
