@@ -21,6 +21,17 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN')''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+    
+    # Safe migration for existing databases
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0.0")
+    except:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN referral_code TEXT")
+    except:
+        pass
+
     conn.commit()
     conn.close()
 
@@ -40,7 +51,7 @@ def allowed_file(filename):
 
 # ---------------- MAIL CONFIGURATION ----------------
 SENDER_EMAIL = "rp619653@gmail.com"
-SENDER_PASSWORD = "sybt bsag faxj bqip"  # Gmail App Password (16 digit)
+SENDER_PASSWORD = "sybt bsag faxj bqip"  
 ADMIN_EMAIL = "rp619653@gmail.com"
 
 def send_email_otp(to_email, otp_code):
@@ -517,23 +528,25 @@ def login():
                     c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code) VALUES (?, 0.0, ?, ?)', (user_id, profile_pic, my_unique_ref))
                     conn.commit()
 
-                    # Process Referral if code exists and valid
                     if ref_code:
                         c.execute('SELECT phone FROM users WHERE referral_code = ?', (ref_code,))
                         referrer = c.fetchone()
                         if referrer and referrer[0] != user_id:
                             referrer_phone = referrer[0]
-                            # Give Instant ₹100 to referrer
                             c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
                             c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
                                         (referrer_phone, 100.0, f"Referral Bonus (User: {user_id})"))
-                            # Record in referrals history
                             c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status) VALUES (?, ?, ?)',
                                         (referrer_phone, user_id, 'REGISTERED'))
                             conn.commit()
-                elif profile_pic:
-                    c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic, user_id))
-                    conn.commit()
+                else:
+                    # Ensure existing user has a referral code if missing
+                    if not row[1]:
+                        c.execute('UPDATE users SET referral_code = ? WHERE phone = ?', (my_unique_ref, user_id))
+                        conn.commit()
+                    if profile_pic:
+                        c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic, user_id))
+                        conn.commit()
                 conn.close()
                 return redirect(url_for('home'))
             else:
@@ -588,7 +601,7 @@ def home():
                 session['active_task_title'] = task[1]
                 msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
             else:
-                msg = "❌ Galat OTP या Task Pehle se active hai!"
+                msg = "❌ Galat OTP ya Task Pehle se active hai!"
         elif action == 'complete_work':
             total_time_seconds = float(request.form.get('elapsed_seconds', 0))
             hours = total_time_seconds / 3600
@@ -659,7 +672,6 @@ def refer():
     profile_pic = user[1] if user else ''
     ref_code = user[2] if user and user[2] else 'REF123'
 
-    # Fetch Permanent Referral History with referred user's email/phone and timestamp
     c.execute("SELECT referred_phone, timestamp, status FROM referrals WHERE referrer_phone = ? ORDER BY id DESC", (phone,))
     refer_history = c.fetchall()
     conn.close()
@@ -701,20 +713,17 @@ def withdraw():
             elif amount > current_bal:
                 msg = "❌ Insufficient Balance!"
             else:
-                # Deduct balance and update total withdrawn
                 new_total_withdrawn = total_withdrawn_so_far + amount
                 c.execute('UPDATE users SET balance = balance - ?, total_withdrawn = ? WHERE phone = ?', (amount, new_total_withdrawn, phone))
                 c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
                             (phone, -amount, f"Withdrawal ({withdraw_type.upper()})"))
                 conn.commit()
 
-                # Check if this user was referred by someone and hit the ₹5000 milestone
                 c.execute("SELECT referrer_phone, milestone_paid FROM referrals WHERE referred_phone = ?", (phone,))
                 ref_record = c.fetchone()
-                if ref_record and ref_record[1] == 0: # Milestone not paid yet
+                if ref_record and ref_record[1] == 0: 
                     if new_total_withdrawn >= 5000:
                         referrer_phone = ref_record[0]
-                        # Give ₹500 bonus to referrer automatically
                         c.execute('UPDATE users SET balance = balance + 500.0 WHERE phone = ?', (referrer_phone,))
                         c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
                                     (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)"))
