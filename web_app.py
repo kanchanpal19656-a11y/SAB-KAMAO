@@ -24,6 +24,8 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', amount_earned REAL DEFAULT 0.0)''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS reels
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
     for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
         try:
@@ -44,14 +46,20 @@ with app.app_context():
     init_db()
 
 UPLOAD_FOLDER = 'static/uploads'
-ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+VIDEO_FOLDER = 'static/videos'
+ALLOWED_IMG_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
+ALLOWED_VID_EXTENSIONS = {'mp4', 'mov', 'avi', 'mkv', 'webm'}
+
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+app.config['VIDEO_FOLDER'] = VIDEO_FOLDER
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
+if not os.path.exists(VIDEO_FOLDER):
+    os.makedirs(VIDEO_FOLDER)
 
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+def allowed_file(filename, allowed_set):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_set
 
 SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  
@@ -187,7 +195,7 @@ HTML_TEMPLATE = """
         .menu-btn { font-size: 22px; cursor: pointer; color: white; padding: 5px; }
         .container { padding: 15px; }
         .card { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); margin-bottom: 15px; }
-        input, select { width: 100%; padding: 11px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; }
+        input, select, textarea { width: 100%; padding: 11px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; }
         input[type=submit], button { background: #27ae60; color: white; border: none; font-weight: bold; cursor: pointer; padding: 12px; border-radius: 8px; width: 100%; font-size: 16px; margin-top: 5px; }
         .timer { font-size: 32px; font-weight: bold; color: #e67e22; text-align: center; margin: 10px 0; }
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #ffffff; display: flex; justify-content: space-around; align-items: center; padding: 8px 0; border-top: 1px solid #e0e0e0; z-index: 99999; box-shadow: 0 -4px 15px rgba(0,0,0,0.08); }
@@ -197,6 +205,7 @@ HTML_TEMPLATE = """
         .green-grad { background: linear-gradient(135deg, #11998e, #38ef7d); box-shadow: 0 3px 8px rgba(56,239,125,0.3); }
         .blue-grad { background: linear-gradient(135deg, #2193b0, #6dd5ed); box-shadow: 0 3px 8px rgba(33,147,176,0.3); }
         .purple-grad { background: linear-gradient(135deg, #8E2DE2, #4A00E0); box-shadow: 0 3px 8px rgba(142,45,226,0.3); }
+        .pink-grad { background: linear-gradient(135deg, #f12711, #f5af19); box-shadow: 0 3px 8px rgba(245,175,25,0.3); }
         .profile-avatar {
             width: 80px; height: 80px; border-radius: 50%; object-fit: cover;
             border: 3px solid #27ae60; margin: 0 auto 10px auto; display: flex;
@@ -206,6 +215,11 @@ HTML_TEMPLATE = """
             width: 45px; height: 45px; border-radius: 50%; object-fit: cover;
             border: 2px solid #27ae60; display: inline-block; vertical-align: middle; margin-right: 10px; background: #e8f5e9; text-align:center; line-height:45px; font-size:20px;
         }
+        .reel-card { background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); color: #fff; }
+        .reel-header { padding: 12px; display: flex; align-items: center; background: rgba(0,0,0,0.7); }
+        .reel-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 2px solid #27ae60; margin-right: 10px; background: #333; text-align:center; line-height:38px; font-size:16px; }
+        .reel-video { width: 100%; max-height: 400px; background: #111; display: block; object-fit: contain; }
+        .reel-footer { padding: 12px; background: rgba(0,0,0,0.8); display: flex; justify-content: space-between; align-items: center; }
         .refer-box { background: #f9fdfa; border: 2px dashed #27ae60; padding: 15px; border-radius: 10px; text-align: center; margin-top: 10px; }
     </style>
 </head>
@@ -344,6 +358,54 @@ HTML_TEMPLATE = """
             </div>
         {% endif %}
 
+        {% if page == 'reels' %}
+            <div class="card">
+                <h3 style="margin-top:0; color:#1c4d25;"><i class="fa-solid fa-video"></i> Upload Public Reel</h3>
+                <form method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="action" value="upload_reel">
+                    <label style="font-weight:600; font-size:14px;">Caption / Title:</label>
+                    <input type="text" name="caption" placeholder="Write something about your video..." required>
+                    <label style="font-weight:600; font-size:14px; display:block; margin-top:5px;">Select Video File (MP4/MOV):</label>
+                    <input type="file" name="reel_video" accept="video/*" required style="font-size:13px;">
+                    <input type="submit" value="Upload & Publish Publicly" style="background:#f39c12; margin-top:10px;">
+                </form>
+            </div>
+
+            <div>
+                <h3 style="color:#1c4d25; margin-bottom:12px;"><i class="fa-solid fa-film"></i> Public Reels Feed</h3>
+                {% if not all_reels %}
+                    <p style="color:#888; text-align:center;">Abhi koi reel upload nahi ki gayi hai. Pehli reel aap upload karein!</p>
+                {% else %}
+                    {% for reel in all_reels %}
+                        <div class="reel-card">
+                            <div class="reel-header">
+                                {% if reel[5] %}
+                                    <img src="/static/uploads/{{ reel[5] }}" class="reel-avatar">
+                                {% else %}
+                                    <div class="reel-avatar">👤</div>
+                                {% endif %}
+                                <div>
+                                    <b style="font-size:14px; color:#fff;">{{ reel[1] }}</b><br>
+                                    <small style="color:#aaa; font-size:11px;">{{ reel[4] }}</small>
+                                </div>
+                            </div>
+                            <video src="/static/videos/{{ reel[3] }}" controls class="reel-video"></video>
+                            <div class="reel-footer">
+                                <span style="font-size:13px; color:#ddd; flex:1; padding-right:10px;">{{ reel[2] }}</span>
+                                <form method="POST" style="margin:0;">
+                                    <input type="hidden" name="action" value="like_reel">
+                                    <input type="hidden" name="reel_id" value="{{ reel[0] }}">
+                                    <button type="submit" style="background:transparent; border:1px solid #e74c3c; color:#e74c3c; padding:6px 12px; font-size:13px; border-radius:20px; width:auto;">
+                                        <i class="fa-solid fa-heart"></i> {{ reel[6] }} Likes
+                                    </button>
+                                </form>
+                            </div>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+        {% endif %}
+
         {% if page == 'refer' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#8E2DE2;"><i class="fa-solid fa-gift"></i> Refer & Earn</h3>
@@ -424,25 +486,31 @@ HTML_TEMPLATE = """
             <div class="nav-icon red-grad">
                 <i class="fa-solid fa-briefcase" style="font-size:16px; color:#fff;"></i>
             </div>
-            <span style="font-size:10px; font-weight:700; color:#2c3e50; display:block;">Kam Lo</span>
+            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Kam Lo</span>
         </a>
         <a href="/kam_do" class="nav-item">
             <div class="nav-icon green-grad">
                 <i class="fa-solid fa-rectangle-ad" style="font-size:16px; color:#fff;"></i>
             </div>
-            <span style="font-size:10px; font-weight:700; color:#2c3e50; display:block;">Kam Do</span>
+            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Kam Do</span>
+        </a>
+        <a href="/reels" class="nav-item">
+            <div class="nav-icon pink-grad">
+                <i class="fa-solid fa-clapperboard" style="font-size:16px; color:#fff;"></i>
+            </div>
+            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Reels</span>
         </a>
         <a href="/refer" class="nav-item">
             <div class="nav-icon purple-grad">
                 <i class="fa-solid fa-gift" style="font-size:16px; color:#fff;"></i>
             </div>
-            <span style="font-size:10px; font-weight:700; color:#2c3e50; display:block;">Refer</span>
+            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Refer</span>
         </a>
         <a href="/withdraw" class="nav-item">
             <div class="nav-icon blue-grad">
                 <i class="fa-solid fa-wallet" style="font-size:16px; color:#fff;"></i>
             </div>
-            <span style="font-size:10px; font-weight:700; color:#2c3e50; display:block;">Withdraw</span>
+            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Withdraw</span>
         </a>
     </div>
 
@@ -636,7 +704,7 @@ def login():
         profile_pic_filename = ''
         if 'profile_pic' in request.files:
             file = request.files['profile_pic']
-            if file and allowed_file(file.filename):
+            if file and allowed_file(file.filename, ALLOWED_IMG_EXTENSIONS):
                 filename = secure_filename(f"{email}_{file.filename}")
                 file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
                 profile_pic_filename = filename
@@ -705,7 +773,7 @@ def update_profile():
     phone = session.get('phone')
     if 'new_profile_pic' in request.files:
         file = request.files['new_profile_pic']
-        if file and allowed_file(file.filename):
+        if file and allowed_file(file.filename, ALLOWED_IMG_EXTENSIONS):
             filename = secure_filename(f"{phone}_{file.filename}")
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
             conn = sqlite3.connect('sab_kamao.db')
@@ -857,7 +925,6 @@ def kam_do():
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
             
-            # Fetch strictly verified profile location and coordinates of the task provider
             c.execute("SELECT lat, lng, location_name FROM users WHERE phone = ?", (phone,))
             u_data = c.fetchone()
             t_lat = u_data[0] if u_data else 28.4744
@@ -899,6 +966,55 @@ def kam_do():
     conn.close()
 
     return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, my_tasks=my_tasks, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
+
+@app.route('/reels', methods=['GET', 'POST'])
+def reels():
+    if not session.get('logged_in'):
+        return redirect(url_for('login'))
+    msg = ""
+    phone = session.get('phone')
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+
+    if request.method == 'POST':
+        action = request.form.get('action')
+        if action == 'upload_reel':
+            caption = request.form.get('caption', '').strip()
+            if 'reel_video' in request.files:
+                file = request.files['reel_video']
+                if file and allowed_file(file.filename, ALLOWED_VID_EXTENSIONS):
+                    vid_filename = secure_filename(f"{phone}_{int(datetime.now().timestamp())}_{file.filename}")
+                    file.save(os.path.join(app.config['VIDEO_FOLDER'], vid_filename))
+                    
+                    c.execute("INSERT INTO reels (uploader_phone, caption, video_filename) VALUES (?, ?, ?)",
+                                (phone, caption, vid_filename))
+                    conn.commit()
+                    msg = "✅ Reel successfully uploaded and published publicly!"
+                else:
+                    msg = "❌ Invalid video format! Please upload MP4/MOV."
+        elif action == 'like_reel':
+            reel_id = request.form.get('reel_id')
+            c.execute("UPDATE reels SET likes = likes + 1 WHERE id = ?", (reel_id,))
+            conn.commit()
+
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
+    user_lat = res[2] if res and res[2] else 28.4744
+    user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
+
+    # Fetch all public reels with uploader profile pics
+    c.execute("SELECT r.id, r.uploader_phone, r.caption, r.video_filename, r.timestamp, u.profile_pic, r.likes FROM reels r JOIN users u ON r.uploader_phone = u.phone ORDER BY r.id DESC")
+    all_reels = c.fetchall()
+
+    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
+    work_history = c.fetchall()
+
+    conn.close()
+
+    return render_template_string(HTML_TEMPLATE, page='reels', phone=phone, balance=balance, profile_pic=profile_pic, all_reels=all_reels, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
 
 @app.route('/refer', methods=['GET'])
 def refer():
