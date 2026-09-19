@@ -23,7 +23,6 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     
-    # Safe migration for existing databases
     try:
         c.execute("ALTER TABLE users ADD COLUMN total_withdrawn REAL DEFAULT 0.0")
     except:
@@ -43,7 +42,6 @@ def init_db():
 with app.app_context():
     init_db()
 
-# ---------------- FILE UPLOAD CONFIG ----------------
 UPLOAD_FOLDER = 'static/uploads'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
@@ -54,7 +52,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# ---------------- MAIL CONFIGURATION ----------------
 SENDER_EMAIL = "rp619653@gmail.com"
 SENDER_PASSWORD = "sybt bsag faxj bqip"  
 ADMIN_EMAIL = "rp619653@gmail.com"
@@ -235,7 +232,7 @@ HTML_TEMPLATE = """
                     <div style="border-bottom:1px solid #eee; padding:10px 0;">
                         <b>{{ task[1] }}</b><br>
                         <small style="color:#555;">Payment Mode: <b>{{ task[2] }}</b></small>
-                        <form method="POST" style="margin-top:5px;" onsubmit="startTaskTimer('{{ task[1] }}')">
+                        <form method="POST" style="margin-top:5px;" onsubmit="initTaskStart()">
                             <input type="hidden" name="action" value="verify_task_otp">
                             <input type="hidden" name="task_id" value="{{ task[0] }}">
                             <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required>
@@ -450,34 +447,47 @@ HTML_TEMPLATE = """
         }
 
         const ratePerHour = 75;
-        function startTaskTimer(taskTitle) {
-            if (!localStorage.getItem('sab_kamao_seconds')) {
-                localStorage.setItem('sab_kamao_seconds', '0');
+
+        function initTaskStart() {
+            // Set start timestamp when user starts task
+            if (!localStorage.getItem('sab_kamao_start_time')) {
+                localStorage.setItem('sab_kamao_start_time', Date.now().toString());
             }
         }
+
         function clearTaskTimer() {
-            localStorage.removeItem('sab_kamao_seconds');
+            localStorage.removeItem('sab_kamao_start_time');
         }
+
         function updateTimer() {
             const timerElem = document.getElementById('time-display');
             if (timerElem) {
-                let seconds = parseInt(localStorage.getItem('sab_kamao_seconds') || '0');
                 {% if session.get('active_task') %}
-                seconds++;
-                localStorage.setItem('sab_kamao_seconds', seconds);
+                    let startTime = localStorage.getItem('sab_kamao_start_time');
+                    if (!startTime) {
+                        startTime = Date.now().toString();
+                        localStorage.setItem('sab_kamao_start_time', startTime);
+                    }
+                    // Calculate exact elapsed seconds based on real wall-clock time (works even if screen is off)
+                    let now = Date.now();
+                    let seconds = Math.floor((now - parseInt(startTime)) / 1000);
+                    if (seconds < 0) seconds = 0;
+
+                    document.getElementById('elapsed_seconds').value = seconds;
+                    let hrs = Math.floor(seconds / 3600);
+                    let mins = Math.floor((seconds % 3600) / 60);
+                    let secs = seconds % 60;
+                    let formattedTime = (hrs < 10 ? "0" + hrs : hrs) + ":" + (mins < 10 ? "0" + mins : mins) + ":" + (secs < 10 ? "0" + secs : secs);
+                    timerElem.innerText = formattedTime;
+                    let currentEarning = ((seconds / 3600) * ratePerHour).toFixed(2);
+                    document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
+                {% else %}
+                    localStorage.removeItem('sab_kamao_start_time');
                 {% endif %}
-                
-                document.getElementById('elapsed_seconds').value = seconds;
-                let hrs = Math.floor(seconds / 3600);
-                let mins = Math.floor((seconds % 3600) / 60);
-                let secs = seconds % 60;
-                let formattedTime = (hrs < 10 ? "0" + hrs : hrs) + ":" + (mins < 10 ? "0" + mins : mins) + ":" + (secs < 10 ? "0" + secs : secs);
-                timerElem.innerText = formattedTime;
-                let currentEarning = ((seconds / 3600) * ratePerHour).toFixed(2);
-                document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
             }
         }
         setInterval(updateTimer, 1000);
+        window.onload = updateTimer;
     </script>
 </body>
 </html>
@@ -510,13 +520,11 @@ def login():
             my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
 
             if not row:
-                # New Registration (Signup)
                 hashed_pw = generate_password_hash(password)
                 c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password) VALUES (?, 0.0, ?, ?, ?)', 
                             (email, profile_pic_filename, my_unique_ref, hashed_pw))
                 conn.commit()
 
-                # Handle referral logic if referred
                 if ref_code_input:
                     c.execute('SELECT phone FROM users WHERE referral_code = ?', (ref_code_input,))
                     referrer = c.fetchone()
@@ -535,9 +543,7 @@ def login():
                 flash("🎉 Account Successfully Created & Logged In!", "success")
                 return redirect(url_for('home'))
             else:
-                # Existing User Login
                 stored_hash = row[1]
-                # Fallback if old user didn't have password stored
                 if not stored_hash:
                     c.execute('UPDATE users SET password = ? WHERE phone = ?', (generate_password_hash(password), email))
                     conn.commit()
