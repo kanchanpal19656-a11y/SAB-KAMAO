@@ -14,10 +14,14 @@ import math
 app = Flask(__name__)
 app.secret_key = 'sab_kamao_secret_key_123'
 
-IST = pytz.timezone('Asia/Kolkata')
+def get_user_timezone(lat, lng):
+    if 68.1 <= lng <= 97.4 and 6.5 <= lat <= 35.5:
+        return pytz.timezone('Asia/Kolkata')
+    return pytz.timezone('Asia/Kolkata')
 
-def get_current_ist_time():
-    return datetime.now(IST).strftime('%Y-%m-%d %I:%M:%S %p')
+def get_formatted_time(lat=28.4744, lng=77.5040):
+    tz = get_user_timezone(lat, lng)
+    return datetime.now(tz).strftime('%Y-%m-%d %I:%M:%S %p')
 
 def init_db():
     conn = sqlite3.connect('sab_kamao.db')
@@ -736,7 +740,6 @@ HTML_TEMPLATE = """
             alert("Referral link copied to clipboard!");
         }
 
-        // Live AM/PM Clock based on India/IST timezone
         function updateLiveClock() {
             const clockElem = document.getElementById('live-clock');
             if(clockElem) {
@@ -898,18 +901,22 @@ def login():
         if "@" in email and "." in email and len(password) > 0:
             conn = sqlite3.connect('sab_kamao.db')
             c = conn.cursor()
-            c.execute('SELECT phone, password, referral_code FROM users WHERE phone = ?', (email,))
+            c.execute('SELECT phone, password, referral_code, lat, lng FROM users WHERE phone = ?', (email,))
             row = c.fetchone()
             
             my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
             new_token = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
             client_ip = request.remote_addr or 'Mobile App'
 
+            user_lat = row[3] if row and len(row) > 3 and row[3] else 28.4744
+            user_lng = row[4] if row and len(row) > 4 and row[4] else 77.5040
+            current_time_str = get_formatted_time(user_lat, user_lng)
+
             if not row:
                 hashed_pw = generate_password_hash(password)
                 c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password, location_name, active_session_token) VALUES (?, 0.0, ?, ?, ?, ?, ?)', 
                             (email, profile_pic_filename, my_unique_ref, hashed_pw, 'Greater Noida', new_token))
-                c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, get_current_ist_time()))
+                c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, current_time_str))
                 conn.commit()
 
                 if ref_code_input:
@@ -919,9 +926,9 @@ def login():
                         referrer_phone = referrer[0]
                         c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
                         c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})", get_current_ist_time()))
+                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})", current_time_str))
                         c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status, timestamp) VALUES (?, ?, ?, ?)',
-                                    (referrer_phone, email, 'REGISTERED', get_current_ist_time()))
+                                    (referrer_phone, email, 'REGISTERED', current_time_str))
                         conn.commit()
                 
                 session['phone'] = email
@@ -943,7 +950,7 @@ def login():
                     session['session_token'] = new_token
                     
                     c.execute('UPDATE users SET active_session_token = ? WHERE phone = ?', (new_token, email))
-                    c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, get_current_ist_time()))
+                    c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, current_time_str))
                     
                     if profile_pic_filename:
                         c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic_filename, email))
@@ -1059,6 +1066,14 @@ def home():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
+    user_lat = res[2] if res and res[2] else 28.4744
+    user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
+
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'verify_task_otp':
@@ -1072,7 +1087,7 @@ def home():
                 c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
                 task = c.fetchone()
                 if task and str(task[0]).strip() == str(input_otp):
-                    start_dt = get_current_ist_time()
+                    start_dt = get_formatted_time(user_lat, user_lng)
                     c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
                     conn.commit()
                     msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
@@ -1087,24 +1102,16 @@ def home():
                 total_earned = 1.0
             
             comp_otp = str(random.randint(1000, 9999))
-            finish_dt = get_current_ist_time()
+            finish_dt = get_formatted_time(user_lat, user_lng)
             
             c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ?, amount_earned = ? WHERE id = ? AND worker_phone = ?", 
                         (comp_otp, finish_dt, total_earned, task_id, phone))
             
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
             c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)", get_current_ist_time()))
+                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)", get_formatted_time(user_lat, user_lng)))
             conn.commit()
             msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye. Ab Kam Dene Wale (Owner) ko apna Completion OTP dein taaki wo task final close kar sake."
-
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
     c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
     active_task_info = c.fetchone()
@@ -1135,22 +1142,24 @@ def kam_do():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
+    user_lat = res[2] if res and res[2] else 28.4744
+    user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
+
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'create_task':
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
-            
-            c.execute("SELECT lat, lng, location_name FROM users WHERE phone = ?", (phone,))
-            u_data = c.fetchone()
-            t_lat = u_data[0] if u_data else 28.4744
-            t_lng = u_data[1] if u_data else 77.5040
-            task_loc_name = u_data[2] if u_data else 'Greater Noida'
 
             gen_otp = str(random.randint(1000, 9999))
-            post_dt = get_current_ist_time()
+            post_dt = get_formatted_time(user_lat, user_lng)
             c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time, lat, lng, location_name) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)",
-                        (phone, title, pay_method, gen_otp, post_dt, t_lat, t_lng, task_loc_name))
+                        (phone, title, pay_method, gen_otp, post_dt, user_lat, user_lng, user_loc_name))
             conn.commit()
             msg = f"✅ Task Posted! OTP: <b style='font-size:22px; color:#e67e22;'>{gen_otp}</b> (Ye OTP kaam karne wale ko dein)"
         elif action == 'owner_verify_completion':
@@ -1164,14 +1173,6 @@ def kam_do():
                 msg = "✅ Task successfully verified and closed!"
             else:
                 msg = "❌ Galat Completion OTP!"
-
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
     c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time, location_name, worker_phone, worker_lat, worker_lng FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
     my_tasks = c.fetchall()
@@ -1192,6 +1193,14 @@ def reels():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
+    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
+    user_lat = res[2] if res and res[2] else 28.4744
+    user_lng = res[3] if res and res[3] else 77.5040
+    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
+
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'upload_reel':
@@ -1199,11 +1208,11 @@ def reels():
             if 'reel_video' in request.files:
                 file = request.files['reel_video']
                 if file and allowed_file(file.filename, ALLOWED_VID_EXTENSIONS):
-                    vid_filename = secure_filename(f"{phone}_{int(datetime.now(IST).timestamp())}_{file.filename}")
+                    vid_filename = secure_filename(f"{phone}_{int(datetime.now().timestamp())}_{file.filename}")
                     file.save(os.path.join(app.config['VIDEO_FOLDER'], vid_filename))
                     
                     c.execute("INSERT INTO reels (uploader_phone, caption, video_filename, timestamp) VALUES (?, ?, ?, ?)",
-                                (phone, caption, vid_filename, get_current_ist_time()))
+                                (phone, caption, vid_filename, get_formatted_time(user_lat, user_lng)))
                     conn.commit()
                     msg = "✅ Reel successfully uploaded and published publicly!"
                 else:
@@ -1237,16 +1246,8 @@ def reels():
             comment_text = request.form.get('comment_text', '').strip()
             if comment_text:
                 c.execute("INSERT INTO reel_comments (reel_id, commenter_phone, comment_text, timestamp) VALUES (?, ?, ?, ?)",
-                            (reel_id, phone, comment_text, get_current_ist_time()))
+                            (reel_id, phone, comment_text, get_formatted_time(user_lat, user_lng)))
                 conn.commit()
-
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
     c.execute("SELECT r.id, r.uploader_phone, r.caption, r.video_filename, r.timestamp, u.profile_pic, r.likes FROM reels r JOIN users u ON r.uploader_phone = u.phone ORDER BY r.id DESC")
     all_reels = c.fetchall()
@@ -1294,6 +1295,15 @@ def withdraw():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
+    c.execute("SELECT balance, profile_pic, total_withdrawn, lat, lng, location_name FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
+    total_withdrawn = res[2] if res else 0.0
+    user_lat = res[3] if res and res[3] else 28.4744
+    user_lng = res[4] if res and res[4] else 77.5040
+    user_loc_name = res[5] if res and res[5] else 'Greater Noida'
+
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'withdraw':
@@ -1310,20 +1320,15 @@ def withdraw():
                 ifsc_code = request.form.get('ifsc_code', '').upper()
                 details_str = f"Name: {acc_holder}\nBank: {bank_name}\nAccount No: {acc_number}\nIFSC: {ifsc_code}"
 
-            c.execute('SELECT balance, total_withdrawn FROM users WHERE phone = ?', (phone,))
-            res = c.fetchone()
-            current_bal = res[0] if res else 0.0
-            total_withdrawn_so_far = res[1] if res else 0.0
-
             if amount < 300:
                 msg = "❌ Minimum withdrawal amount is ₹300!"
-            elif amount > current_bal:
+            elif amount > balance:
                 msg = "❌ Insufficient Balance!"
             else:
-                new_total_withdrawn = total_withdrawn_so_far + amount
+                new_total_withdrawn = total_withdrawn + amount
                 c.execute('UPDATE users SET balance = balance - ?, total_withdrawn = ? WHERE phone = ?', (amount, new_total_withdrawn, phone))
                 c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()})", get_current_ist_time()))
+                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()})", get_formatted_time(user_lat, user_lng)))
                 conn.commit()
 
                 c.execute("SELECT referrer_phone, milestone_paid FROM referrals WHERE referred_phone = ?", (phone,))
@@ -1333,21 +1338,12 @@ def withdraw():
                         referrer_phone = ref_record[0]
                         c.execute('UPDATE users SET balance = balance + 500.0 WHERE phone = ?', (referrer_phone,))
                         c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                                    (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)", get_current_ist_time()))
+                                    (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)", get_formatted_time(user_lat, user_lng)))
                         c.execute("UPDATE referrals SET milestone_paid = 1, status = 'MILESTONE_REACHED' WHERE referred_phone = ?", (phone,))
                         conn.commit()
 
                 send_withdrawal_email(phone, amount, withdraw_type, details_str)
                 msg = f"✅ ₹{amount} Withdrawal Request Submitted!"
-
-    c.execute("SELECT balance, profile_pic, total_withdrawn, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    total_withdrawn = res[2] if res else 0.0
-    user_lat = res[3] if res and res[3] else 28.4744
-    user_lng = res[4] if res and res[4] else 77.5040
-    user_loc_name = res[5] if res and res[5] else 'Greater Noida'
 
     c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
     work_history = c.fetchall()
@@ -1365,6 +1361,11 @@ def download_pdf():
     
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
+    c.execute("SELECT lat, lng FROM users WHERE phone = ?", (phone,))
+    u_loc = c.fetchone()
+    u_lat = u_loc[0] if u_loc and u_loc[0] else 28.4744
+    u_lng = u_loc[1] if u_loc and u_loc[1] else 77.5040
+
     if history_type == 'owner':
         c.execute("SELECT title, payment_method, status, start_time, finish_time, location_name FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
         title_text = "Task Provider History Report"
@@ -1380,7 +1381,7 @@ def download_pdf():
     <body style="font-family: Arial; padding: 20px;">
         <h2>{title_text}</h2>
         <p><b>User Account:</b> {phone}</p>
-        <p><b>Generated Date (IST):</b> {get_current_ist_time()}</p>
+        <p><b>Generated Date (IST):</b> {get_formatted_time(u_lat, u_lng)}</p>
         <hr>
         <table border="1" cellpadding="8" cellspacing="0" style="width:100%; border-collapse:collapse; font-size:13px;">
             <tr style="background:#f2f2f2;">
