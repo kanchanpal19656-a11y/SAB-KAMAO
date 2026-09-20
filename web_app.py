@@ -8,10 +8,16 @@ from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime
+import pytz
 import math
 
 app = Flask(__name__)
 app.secret_key = 'sab_kamao_secret_key_123'
+
+IST = pytz.timezone('Asia/Kolkata')
+
+def get_current_ist_time():
+    return datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
 
 def init_db():
     conn = sqlite3.connect('sab_kamao.db')
@@ -19,15 +25,15 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida')''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', amount_earned REAL DEFAULT 0.0)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', amount_earned REAL DEFAULT 0.0, worker_lat REAL DEFAULT 28.4744, worker_lng REAL DEFAULT 77.5040)''')
     c.execute('''CREATE TABLE IF NOT EXISTS referrals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS reels
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS reel_comments
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, reel_id INTEGER, commenter_phone TEXT, comment_text TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, reel_id INTEGER, commenter_phone TEXT, comment_text TEXT, timestamp TEXT)''')
     
     for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
         try:
@@ -35,7 +41,7 @@ def init_db():
         except:
             pass
             
-    for col, c_type in [("worker_phone", "TEXT DEFAULT ''"), ("start_time", "TEXT DEFAULT ''"), ("completion_otp", "TEXT DEFAULT ''"), ("finish_time", "TEXT DEFAULT ''"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("amount_earned", "REAL DEFAULT 0.0")]:
+    for col, c_type in [("worker_phone", "TEXT DEFAULT ''"), ("start_time", "TEXT DEFAULT ''"), ("completion_otp", "TEXT DEFAULT ''"), ("finish_time", "TEXT DEFAULT ''"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("amount_earned", "REAL DEFAULT 0.0"), ("worker_lat", "REAL DEFAULT 28.4744"), ("worker_lng", "REAL DEFAULT 77.5040")]:
         try:
             c.execute(f"ALTER TABLE tasks ADD COLUMN {col} {c_type}")
         except:
@@ -281,7 +287,7 @@ HTML_TEMPLATE = """
                         <div style="flex:1;">
                             <b>{{ task[1] }}</b><br>
                             <small style="color:#555;">Owner: <b>{{ task[6] }}</b> | Mode: <b>{{ task[2] }}</b></small><br>
-                            <small style="color:#e67e22;">📍 <b>{{ task[8] }}</b> ({{ "%.2f"|format(task[9]) }} KM away)</small>
+                            <small style="color:#e67e22;">📍 <b>{{ task[8] }}</b> (Distance: <b>{{ "%.2f"|format(task[9]) }} KM</b> away)</small>
                             
                             {% if active_task_info %}
                                 <button disabled style="background:#ccc; cursor:not-allowed; padding:8px; font-size:13px; margin-top:8px;">Task Locked (Complete Previous First)</button>
@@ -345,7 +351,7 @@ HTML_TEMPLATE = """
 
             <div class="card">
                 <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & History</h3>
+                    <h3 style="margin:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & Worker Tracking</h3>
                     <a href="/download_pdf?type=owner" style="background:#3498db; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-download"></i> PDF</a>
                 </div>
                 {% if not my_tasks %}
@@ -356,7 +362,16 @@ HTML_TEMPLATE = """
                             <b>{{ t[1] }}</b><br>
                             <small style="color:#555;">Mode: <b>{{ t[2] }}</b> | Start OTP: <b style="color:#e67e22;">{{ t[3] }}</b></small><br>
                             <small style="color:#555;">📍 Location: <b>{{ t[7] }}</b></small><br>
-                            <small style="color:#666;">Posted Time: {{ t[5] }}</small><br>
+                            
+                            {% if t[4] in ['IN_PROGRESS', 'WAITING_OWNER_APPROVAL'] %}
+                                <div style="background:#e3f2fd; padding:8px; border-radius:6px; margin-top:6px; border:1px solid #90caf9; font-size:12px;">
+                                    <span style="color:#0d47a1; font-weight:bold;">📡 Worker Live Tracking:</span><br>
+                                    Worker Phone: <b>{{ t[8] }}</b><br>
+                                    Worker Lat/Lng: <b>{{ t[9] }}, {{ t[10] }}</b>
+                                </div>
+                            {% endif %}
+
+                            <small style="color:#666; display:block; margin-top:4px;">Posted Time: {{ t[5] }}</small>
                             <small style="color:#666;">Status: <b>{{ t[4] }}</b></small>
                             {% if t[4] == 'COMPLETED' %}
                                 <br><small style="color:#27ae60;">Finished Time: {{ t[6] }}</small>
@@ -423,7 +438,6 @@ HTML_TEMPLATE = """
                                 {% endif %}
                             </div>
 
-                            <!-- Edit Reel Form (Hidden by default) -->
                             {% if reel[1] == phone %}
                                 <div id="edit_reel_{{ reel[0] }}" style="display:none; background:#222; padding:10px; border-bottom:1px solid #444;">
                                     <form method="POST">
@@ -449,7 +463,6 @@ HTML_TEMPLATE = """
                                     </form>
                                 </div>
 
-                                <!-- Comments Section -->
                                 <div style="border-top:1px solid #333; padding-top:8px; margin-top:8px;">
                                     <small style="color:#aaa; font-weight:bold;"><i class="fa-solid fa-comments"></i> Comments:</small>
                                     <div style="max-height:100px; overflow-y:auto; margin:5px 0;">
@@ -481,7 +494,7 @@ HTML_TEMPLATE = """
         {% if page == 'refer' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#8E2DE2;"><i class="fa-solid fa-gift"></i> Refer & Earn</h3>
-                <p style="color:#555; font-size:14px;">Apne doston ko invite karein! Har naye registration par <b>Instant ₹100</b> paayein, aur jab wo ₹5000 tak withdraw kar lenge toh <b>₹500 Extra Bonus</b> auto-add hoga!</p>
+                <p style="color:#555; font-size:14px;">Apne doston ko invite karein! Har naye registration par <b>Instant ₹100</b> paayein, aur jab wo ₹5000 तक withdraw kar lenge toh <b>₹500 Extra Bonus</b> auto-add hoga!</p>
                 <div class="refer-box">
                     <p style="margin:0 0 5px 0; font-size:12px; color:#666;">Aapka Refer Link:</p>
                     <input type="text" id="refLink" value="{{ request.host_url }}login?ref={{ ref_code }}" readonly style="background:#fff; text-align:center; font-size:13px; font-weight:bold; border:1px solid #27ae60;">
@@ -700,6 +713,22 @@ HTML_TEMPLATE = """
             alert("Referral link copied to clipboard!");
         }
 
+        // Periodically send worker live coordinates to server for owner tracking
+        function updateWorkerLiveLocation() {
+            if (navigator.geolocation) {
+                navigator.geolocation.getCurrentPosition(function(position) {
+                    var lat = position.coords.latitude;
+                    var lng = position.coords.longitude;
+                    fetch('/update_worker_location', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: 'lat=' + lat + '&lng=' + lng
+                    }).catch(e => console.log(e));
+                });
+            }
+        }
+        setInterval(updateWorkerLiveLocation, 10000); // every 10 seconds
+
         function getProfileLocation() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(function(position) {
@@ -816,10 +845,10 @@ def login():
                     if referrer and referrer[0] != email:
                         referrer_phone = referrer[0]
                         c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
-                        c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})"))
-                        c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status) VALUES (?, ?, ?)',
-                                    (referrer_phone, email, 'REGISTERED'))
+                        c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
+                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})", get_current_ist_time()))
+                        c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status, timestamp) VALUES (?, ?, ?, ?)',
+                                    (referrer_phone, email, 'REGISTERED', get_current_ist_time()))
                         conn.commit()
                 
                 session['phone'] = email
@@ -890,6 +919,23 @@ def update_location():
         flash("❌ Invalid location values!", "danger")
     return redirect(url_for('home'))
 
+@app.route('/update_worker_location', methods=['POST'])
+def update_worker_location():
+    if not session.get('logged_in'):
+        return '', 403
+    phone = session.get('phone')
+    try:
+        lat = float(request.form.get('lat', 28.4744))
+        lng = float(request.form.get('lng', 77.5040))
+        conn = sqlite3.connect('sab_kamao.db')
+        c = conn.cursor()
+        c.execute("UPDATE tasks SET worker_lat = ?, worker_lng = ? WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (lat, lng, phone))
+        conn.commit()
+        conn.close()
+        return '', 200
+    except:
+        return '', 400
+
 @app.route('/change_password', methods=['POST'])
 def change_password():
     if not session.get('logged_in'):
@@ -948,7 +994,7 @@ def home():
                 c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
                 task = c.fetchone()
                 if task and str(task[0]).strip() == str(input_otp):
-                    start_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    start_dt = get_current_ist_time()
                     c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
                     conn.commit()
                     msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
@@ -963,14 +1009,15 @@ def home():
                 total_earned = 1.0
             
             comp_otp = str(random.randint(1000, 9999))
-            finish_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            finish_dt = get_current_ist_time()
             
             c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ?, amount_earned = ? WHERE id = ? AND worker_phone = ?", 
                         (comp_otp, finish_dt, total_earned, task_id, phone))
             
+            # Add earnings to balance safely without auto-debiting
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
-            c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)"))
+            c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
+                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)", get_current_ist_time()))
             conn.commit()
             msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye. Ab Kam Dene Wale (Owner) ko apna Completion OTP dein taaki wo task final close kar sake."
 
@@ -1024,7 +1071,7 @@ def kam_do():
             task_loc_name = u_data[2] if u_data else 'Greater Noida'
 
             gen_otp = str(random.randint(1000, 9999))
-            post_dt = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            post_dt = get_current_ist_time()
             c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time, lat, lng, location_name) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)",
                         (phone, title, pay_method, gen_otp, post_dt, t_lat, t_lng, task_loc_name))
             conn.commit()
@@ -1049,7 +1096,7 @@ def kam_do():
     user_lng = res[3] if res and res[3] else 77.5040
     user_loc_name = res[4] if res and res[4] else 'Greater Noida'
 
-    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time, location_name FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
+    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time, location_name, worker_phone, worker_lat, worker_lng FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
     my_tasks = c.fetchall()
 
     c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
@@ -1075,11 +1122,11 @@ def reels():
             if 'reel_video' in request.files:
                 file = request.files['reel_video']
                 if file and allowed_file(file.filename, ALLOWED_VID_EXTENSIONS):
-                    vid_filename = secure_filename(f"{phone}_{int(datetime.now().timestamp())}_{file.filename}")
+                    vid_filename = secure_filename(f"{phone}_{int(datetime.now(IST).timestamp())}_{file.filename}")
                     file.save(os.path.join(app.config['VIDEO_FOLDER'], vid_filename))
                     
-                    c.execute("INSERT INTO reels (uploader_phone, caption, video_filename) VALUES (?, ?, ?)",
-                                (phone, caption, vid_filename))
+                    c.execute("INSERT INTO reels (uploader_phone, caption, video_filename, timestamp) VALUES (?, ?, ?, ?)",
+                                (phone, caption, vid_filename, get_current_ist_time()))
                     conn.commit()
                     msg = "✅ Reel successfully uploaded and published publicly!"
                 else:
@@ -1112,8 +1159,8 @@ def reels():
             reel_id = request.form.get('reel_id')
             comment_text = request.form.get('comment_text', '').strip()
             if comment_text:
-                c.execute("INSERT INTO reel_comments (reel_id, commenter_phone, comment_text) VALUES (?, ?, ?)",
-                            (reel_id, phone, comment_text))
+                c.execute("INSERT INTO reel_comments (reel_id, commenter_phone, comment_text, timestamp) VALUES (?, ?, ?, ?)",
+                            (reel_id, phone, comment_text, get_current_ist_time()))
                 conn.commit()
 
     c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
@@ -1198,8 +1245,8 @@ def withdraw():
             else:
                 new_total_withdrawn = total_withdrawn_so_far + amount
                 c.execute('UPDATE users SET balance = balance - ?, total_withdrawn = ? WHERE phone = ?', (amount, new_total_withdrawn, phone))
-                c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()})"))
+                c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
+                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()})", get_current_ist_time()))
                 conn.commit()
 
                 c.execute("SELECT referrer_phone, milestone_paid FROM referrals WHERE referred_phone = ?", (phone,))
@@ -1208,8 +1255,8 @@ def withdraw():
                     if new_total_withdrawn >= 5000:
                         referrer_phone = ref_record[0]
                         c.execute('UPDATE users SET balance = balance + 500.0 WHERE phone = ?', (referrer_phone,))
-                        c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
-                                    (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)"))
+                        c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
+                                    (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)", get_current_ist_time()))
                         c.execute("UPDATE referrals SET milestone_paid = 1, status = 'MILESTONE_REACHED' WHERE referred_phone = ?", (phone,))
                         conn.commit()
 
@@ -1256,7 +1303,7 @@ def download_pdf():
     <body style="font-family: Arial; padding: 20px;">
         <h2>{title_text}</h2>
         <p><b>User Account:</b> {phone}</p>
-        <p><b>Generated Date:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+        <p><b>Generated Date (IST):</b> {get_current_ist_time()}</p>
         <hr>
         <table border="1" cellpadding="8" cellspacing="0" style="width:100%; border-collapse:collapse; font-size:13px;">
             <tr style="background:#f2f2f2;">
