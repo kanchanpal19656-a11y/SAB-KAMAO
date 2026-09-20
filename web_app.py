@@ -17,13 +17,13 @@ app.secret_key = 'sab_kamao_secret_key_123'
 IST = pytz.timezone('Asia/Kolkata')
 
 def get_current_ist_time():
-    return datetime.now(IST).strftime('%Y-%m-%d %H:%M:%S')
+    return datetime.now(IST).strftime('%Y-%m-%d %I:%M:%S %p')
 
 def init_db():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida')''')
+                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', active_session_token TEXT DEFAULT '')''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
@@ -34,8 +34,10 @@ def init_db():
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp TEXT)''')
     c.execute('''CREATE TABLE IF NOT EXISTS reel_comments
                  (id INTEGER PRIMARY KEY AUTOINCREMENT, reel_id INTEGER, commenter_phone TEXT, comment_text TEXT, timestamp TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS login_logs
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, ip_address TEXT, timestamp TEXT)''')
     
-    for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'")]:
+    for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("active_session_token", "TEXT DEFAULT ''")]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col} {c_type}")
         except:
@@ -494,7 +496,7 @@ HTML_TEMPLATE = """
         {% if page == 'refer' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#8E2DE2;"><i class="fa-solid fa-gift"></i> Refer & Earn</h3>
-                <p style="color:#555; font-size:14px;">Apne doston ko invite karein! Har naye registration par <b>Instant ₹100</b> paayein, aur jab wo ₹5000 तक withdraw kar lenge toh <b>₹500 Extra Bonus</b> auto-add hoga!</p>
+                <p style="color:#555; font-size:14px;">Apne doston ko invite karein! Har naye registration par <b>Instant ₹100</b> paayein, aur jab wo ₹5000 tak withdraw kar lenge toh <b>₹500 Extra Bonus</b> auto-add hoga!</p>
                 <div class="refer-box">
                     <p style="margin:0 0 5px 0; font-size:12px; color:#666;">Aapka Refer Link:</p>
                     <input type="text" id="refLink" value="{{ request.host_url }}login?ref={{ ref_code }}" readonly style="background:#fff; text-align:center; font-size:13px; font-weight:bold; border:1px solid #27ae60;">
@@ -609,7 +611,8 @@ HTML_TEMPLATE = """
             {% endif %}
             <h3 style="margin:5px 0; color:#1c4d25;">User Profile</h3>
             <p style="margin:5px 0; color:#555; font-size:14px; word-break:break-all;"><b>ID:</b> {{ phone }}</p>
-            <p style="margin:5px 0 15px 0; color:#27ae60; font-weight:bold; font-size:16px;">Balance: ₹{{ balance }}</p>
+            <p style="margin:5px 0 5px 0; color:#27ae60; font-weight:bold; font-size:16px;">Balance: ₹{{ balance }}</p>
+            <p style="margin:0 0 15px 0; color:#d35400; font-weight:bold; font-size:13px;">🕒 Live Time: <span id="live-clock">--:--:--</span></p>
 
             <button onclick="toggleEditProfile()" style="background:#3498db; margin-bottom:8px; font-size:14px; padding:9px;">✏️ Edit Profile Pic</button>
             <div id="editProfileSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd;">
@@ -636,6 +639,22 @@ HTML_TEMPLATE = """
                             <span style="color:#555;">Started: {{ wh[2] }}</span><br>
                             <span style="color:#555;">Finished: {{ wh[3] or 'In Progress' }}</span><br>
                             <span style="color:#666;">Status: <b>{{ wh[4] }}</b></span>
+                        </div>
+                    {% endfor %}
+                {% endif %}
+            </div>
+
+            <button onclick="toggleNotifications()" style="background:#8e44ad; margin-bottom:8px; font-size:14px; padding:9px;">🔔 Login Notifications</button>
+            <div id="notificationsSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:180px; overflow-y:auto;">
+                <h4 style="margin:0 0 6px 0; color:#8e44ad; font-size:13px;">Recent Logins / Alerts:</h4>
+                {% set logs = get_login_logs(phone) %}
+                {% if not logs %}
+                    <p style="font-size:11px; color:#888;">No login logs found.</p>
+                {% else %}
+                    {% for lg in logs %}
+                        <div style="font-size:11px; border-bottom:1px solid #eee; padding:4px 0; color:#444;">
+                            📍 IP/Device: <b>{{ lg[0] }}</b><br>
+                            🕒 Time: {{ lg[1] }}
                         </div>
                     {% endfor %}
                 {% endif %}
@@ -681,6 +700,10 @@ HTML_TEMPLATE = """
             var elem = document.getElementById('workHistorySection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
         }
+        function toggleNotifications() {
+            var elem = document.getElementById('notificationsSection');
+            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
+        }
         function toggleLocationEdit() {
             var elem = document.getElementById('locationEditSection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
@@ -713,7 +736,28 @@ HTML_TEMPLATE = """
             alert("Referral link copied to clipboard!");
         }
 
-        // Periodically send worker live coordinates to server for owner tracking
+        // Live AM/PM Clock based on India/IST timezone
+        function updateLiveClock() {
+            const clockElem = document.getElementById('live-clock');
+            if(clockElem) {
+                const options = { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
+                const timeString = new Date().toLocaleTimeString('en-US', options);
+                clockElem.innerText = timeString;
+            }
+        }
+        setInterval(updateLiveClock, 1000);
+        window.addEventListener('load', updateLiveClock);
+
+        function checkSessionToken() {
+            fetch('/check_session').then(res => res.json()).then(data => {
+                if(data.valid === false) {
+                    alert("⚠️ Aapki ID kisi doosri jagah login ho gayi hai, isliye yahan se logout kiya ja raha hai.");
+                    window.location.href = '/login';
+                }
+            }).catch(e => {});
+        }
+        setInterval(checkSessionToken, 5000);
+
         function updateWorkerLiveLocation() {
             if (navigator.geolocation) {
                 navigator.geolocation.getCurrentPosition(function(position) {
@@ -727,7 +771,7 @@ HTML_TEMPLATE = """
                 });
             }
         }
-        setInterval(updateWorkerLiveLocation, 10000); // every 10 seconds
+        setInterval(updateWorkerLiveLocation, 10000);
 
         function getProfileLocation() {
             if (navigator.geolocation) {
@@ -805,7 +849,33 @@ def get_reel_comments(reel_id):
     conn.close()
     return comms
 
+def get_login_logs(phone):
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+    c.execute("SELECT ip_address, timestamp FROM login_logs WHERE phone = ? ORDER BY id DESC LIMIT 10", (phone,))
+    logs = c.fetchall()
+    conn.close()
+    return logs
+
 app.jinja_env.globals.update(get_reel_comments=get_reel_comments)
+app.jinja_env.globals.update(get_login_logs=get_login_logs)
+
+@app.route('/check_session', methods=['GET'])
+def check_session():
+    if not session.get('logged_in') or not session.get('phone'):
+        return {'valid': False}
+    phone = session.get('phone')
+    token = session.get('session_token')
+    
+    conn = sqlite3.connect('sab_kamao.db')
+    c = conn.cursor()
+    c.execute("SELECT active_session_token FROM users WHERE phone = ?", (phone,))
+    row = c.fetchone()
+    conn.close()
+    
+    if row and row[0] == token:
+        return {'valid': True}
+    return {'valid': False}
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -832,11 +902,14 @@ def login():
             row = c.fetchone()
             
             my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
+            new_token = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
+            client_ip = request.remote_addr or 'Mobile App'
 
             if not row:
                 hashed_pw = generate_password_hash(password)
-                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password, location_name) VALUES (?, 0.0, ?, ?, ?, ?)', 
-                            (email, profile_pic_filename, my_unique_ref, hashed_pw, 'Greater Noida'))
+                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password, location_name, active_session_token) VALUES (?, 0.0, ?, ?, ?, ?, ?)', 
+                            (email, profile_pic_filename, my_unique_ref, hashed_pw, 'Greater Noida', new_token))
+                c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, get_current_ist_time()))
                 conn.commit()
 
                 if ref_code_input:
@@ -853,6 +926,7 @@ def login():
                 
                 session['phone'] = email
                 session['logged_in'] = True
+                session['session_token'] = new_token
                 conn.close()
                 flash("🎉 Account Successfully Created & Logged In!", "success")
                 return redirect(url_for('home'))
@@ -866,12 +940,16 @@ def login():
                 if check_password_hash(stored_hash, password):
                     session['phone'] = email
                     session['logged_in'] = True
+                    session['session_token'] = new_token
+                    
+                    c.execute('UPDATE users SET active_session_token = ? WHERE phone = ?', (new_token, email))
+                    c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, get_current_ist_time()))
+                    
                     if profile_pic_filename:
                         c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic_filename, email))
-                        conn.commit()
                     if not row[2]:
                         c.execute('UPDATE users SET referral_code = ? WHERE phone = ?', (my_unique_ref, email))
-                        conn.commit()
+                    conn.commit()
                     conn.close()
                     return redirect(url_for('home'))
                 else:
@@ -1014,7 +1092,6 @@ def home():
             c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ?, amount_earned = ? WHERE id = ? AND worker_phone = ?", 
                         (comp_otp, finish_dt, total_earned, task_id, phone))
             
-            # Add earnings to balance safely without auto-debiting
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
             c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
                         (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)", get_current_ist_time()))
