@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, session, redirect, url_for, flash, make_response
+from flask import Flask, render_template_string, request, session, redirect, url_for, flash
 import sqlite3
 import random
 import os
@@ -6,104 +6,108 @@ import smtplib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
-from werkzeug.security import generate_password_hash, check_password_hash
-from datetime import datetime
-import pytz
-import math
+# Google Analytics Tracking Script
+GA_TRACKING_SCRIPT = """
+<!-- Google tag (gtag.js) -->
+<script async src="https://www.googletagmanager.com/gtag/js?id=G-VD8GEJCVJ1"></script>
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+  gtag('js', new Date());
+  gtag('config', 'G-VD8GEJCVJ1');
+</script>
+"""
 
 app = Flask(__name__)
 app.secret_key = 'sab_kamao_secret_key_123'
-
-def get_user_timezone(lat, lng):
-    if 68.1 <= lng <= 97.4 and 6.5 <= lat <= 35.5:
-        return pytz.timezone('Asia/Kolkata')
-    return pytz.timezone('Asia/Kolkata')
-
-def get_formatted_time(lat=28.4744, lng=77.5040):
-    tz = get_user_timezone(lat, lng)
-    return datetime.now(tz).strftime('%Y-%m-%d %I:%M:%S %p')
 
 def init_db():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '', referral_code TEXT UNIQUE, total_withdrawn REAL DEFAULT 0.0, password TEXT, lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', active_session_token TEXT DEFAULT '')''')
+                 (phone TEXT PRIMARY KEY, balance REAL DEFAULT 0.0, profile_pic TEXT DEFAULT '')''')
     c.execute('''CREATE TABLE IF NOT EXISTS transactions
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp TEXT)''')
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, amount REAL, title TEXT, timestamp DATETIME DEFAULT (datetime('now', 'localtime')))''')
     c.execute('''CREATE TABLE IF NOT EXISTS tasks
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN', worker_phone TEXT DEFAULT '', start_time TEXT DEFAULT '', completion_otp TEXT DEFAULT '', finish_time TEXT DEFAULT '', lat REAL DEFAULT 28.4744, lng REAL DEFAULT 77.5040, location_name TEXT DEFAULT 'Greater Noida', amount_earned REAL DEFAULT 0.0, worker_lat REAL DEFAULT 28.4744, worker_lng REAL DEFAULT 77.5040)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS referrals
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, referrer_phone TEXT, referred_phone TEXT, status TEXT DEFAULT 'REGISTERED', milestone_paid INTEGER DEFAULT 0, timestamp TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS reels
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, uploader_phone TEXT, caption TEXT, video_filename TEXT, likes INTEGER DEFAULT 0, timestamp TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS reel_comments
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, reel_id INTEGER, commenter_phone TEXT, comment_text TEXT, timestamp TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS login_logs
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT, phone TEXT, ip_address TEXT, timestamp TEXT)''')
-    
-    for col, c_type in [("total_withdrawn", "REAL DEFAULT 0.0"), ("referral_code", "TEXT"), ("password", "TEXT"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("active_session_token", "TEXT DEFAULT ''")]:
-        try:
-            c.execute(f"ALTER TABLE users ADD COLUMN {col} {c_type}")
-        except:
-            pass
-            
-    for col, c_type in [("worker_phone", "TEXT DEFAULT ''"), ("start_time", "TEXT DEFAULT ''"), ("completion_otp", "TEXT DEFAULT ''"), ("finish_time", "TEXT DEFAULT ''"), ("lat", "REAL DEFAULT 28.4744"), ("lng", "REAL DEFAULT 77.5040"), ("location_name", "TEXT DEFAULT 'Greater Noida'"), ("amount_earned", "REAL DEFAULT 0.0"), ("worker_lat", "REAL DEFAULT 28.4744"), ("worker_lng", "REAL DEFAULT 77.5040")]:
-        try:
-            c.execute(f"ALTER TABLE tasks ADD COLUMN {col} {c_type}")
-        except:
-            pass
-
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT, provider_phone TEXT, title TEXT, payment_method TEXT, otp TEXT, status TEXT DEFAULT 'OPEN')''')
     conn.commit()
     conn.close()
 
 with app.app_context():
     init_db()
 
+# ---------------- FILE UPLOAD CONFIG ----------------
 UPLOAD_FOLDER = 'static/uploads'
-VIDEO_FOLDER = 'static/videos'
-ALLOWED_IMG_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
-ALLOWED_VID_EXTENSIONS = {'mp4', 'mov', 'avi', 'mkv', 'webm'}
-
+ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
-app.config['VIDEO_FOLDER'] = VIDEO_FOLDER
 
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
-if not os.path.exists(VIDEO_FOLDER):
-    os.makedirs(VIDEO_FOLDER)
 
-def allowed_file(filename, allowed_set):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in allowed_set
+def allowed_file(filename):
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# ---------------- MAIL CONFIGURATION ----------------
 SENDER_EMAIL = "rp619653@gmail.com"
-SENDER_PASSWORD = "sybt bsag faxj bqip"  
+SENDER_PASSWORD = "ohul knpi kahg orng"  # Gmail App Password (16 digit)
 ADMIN_EMAIL = "rp619653@gmail.com"
 
-def calculate_distance(lat1, lon1, lat2, lon2):
-    R = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
-    a = math.sin(dlat / 2)**2 + math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) * math.sin(dlon / 2)**2
-    c = 2 * math.asin(math.sqrt(a))
-    return R * c
-
-def send_withdrawal_email(phone_or_email, amount, withdraw_type, details):
+def send_email_otp(to_email, otp_code):
     try:
-        subject = f"🚨 New Withdrawal Alert: ₹{amount} from {phone_or_email}"
+        print(f"==========================================")
+        print(f"🔑 LIVE SCREEN OTP FOR {to_email} : {otp_code}")
+        print(f"==========================================")
+        return otp_code
+    except Exception as e:
+        print("OTP Error:", e)
+        return otp_code
+
+def send_login_notification(user_email):
+    try:
+        subject = f"🔔 New Login Alert: {user_email} logged into Sab Kamao"
         body = f"""
         <html>
         <body style="font-family: Arial, sans-serif;">
-            <h2>Sab Kamao - New Withdrawal Request</h2>
-            <p><b>User:</b> {phone_or_email}</p>
-            <p><b>Amount:</b> ₹{amount}</p>
-            <p><b>Withdrawal Method:</b> {withdraw_type.upper()}</p>
-            <p><b>Payment Details:</b> {details}</p>
+            <h2>Sab Kamao - Security Alert</h2>
+            <p>New user login detected on your platform.</p>
+            <p><b>User Email:</b> {user_email}</p>
+            <p><b>Time:</b> Just now</p>
         </body>
         </html>
         """
         msg = MIMEMultipart()
         msg['From'] = SENDER_EMAIL
         msg['To'] = ADMIN_EMAIL
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'html'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=5)
+        server.starttls()
+        server.login(SENDER_EMAIL, SENDER_PASSWORD)
+        server.send_message(msg)
+        server.quit()
+        return True
+    except Exception as e:
+        print("Login Notification Email Error:", e)
+        return False
+
+def send_withdrawal_email(phone_or_email, amount, withdraw_type, details):
+    try:
+        subject = f"🚨 New Withdrawal Request: ₹{amount} from {phone_or_email}"
+        body = f"""
+        <html>
+        <body style="font-family: Arial, sans-serif;">
+            <h2>Sab Kamao - New Withdrawal Request</h2>
+            <p><b>User:</b> {phone_or_email}</p>
+            <p><b>Amount:</b> ₹{amount}</p>
+            <p><b>Withdrawal Method:</b> {withdrawl_type.upper()}</p>
+            <p><b>Payment Details:</b> {details}</p>
+        </body>
+        </html>
+        """
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = "rp619653@gmail.com"
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'html'))
 
@@ -121,7 +125,9 @@ LOGIN_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Sab Kamao - Login / Signup</title>
+{GA_TRACKING_SCRIPT}
+
+    <title>Sab Kamao - Login</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <style>
         * { box-sizing: border-box; }
@@ -139,10 +145,10 @@ LOGIN_TEMPLATE = """
         .logo-box { width: 100px; height: 100px; margin: 0 auto 10px auto; }
         h2 { color: #1c4d25; margin: 0 0 4px 0; font-size: 28px; font-weight: 800; }
         p.subtitle { color: #27ae60; margin: 0 0 22px 0; font-size: 14px; font-weight: 600; }
-        input[type=email], input[type=password], input[type=text], input[type=file], input[type=submit] {
+        input[type=email], input[type=number], input[type=file], input[type=submit] {
             width: 100%; padding: 12px; margin: 8px 0; border-radius: 10px; font-size: 14px;
         }
-        input[type=email], input[type=password], input[type=text] {
+        input[type=email], input[type=number] {
             border: 1.5px solid #27ae60; text-align: center; font-weight: bold; outline: none; background: #fdfdfd;
         }
         input[type=submit] { background: #1c4d25; color: white; border: none; font-weight: bold; cursor: pointer; transition: 0.3s; }
@@ -169,7 +175,7 @@ LOGIN_TEMPLATE = """
         {% with messages = get_flashed_messages(with_categories=true) %}
           {% if messages %}
             {% for category, message in messages %}
-              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin: 10px 0; font-weight: bold; font-size: 14px; border: 1px solid #b3e5fc;">
+              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin: 10px 0; font-weight: bold; font-size: 15px; border: 1px solid #b3e5fc;">
                 {{ message }}
               </div>
             {% endfor %}
@@ -180,14 +186,22 @@ LOGIN_TEMPLATE = """
             <p style="color:#e74c3c; font-weight:bold; font-size:14px;">{{ msg }}</p>
         {% endif %}
 
-        <form method="POST" enctype="multipart/form-data">
-            <input type="email" name="email" placeholder="Enter Valid Gmail Address" required>
-            <input type="password" name="password" placeholder="Enter Account Password" required>
-            <input type="text" name="ref_code_input" placeholder="Referral Code (Optional)" value="{{ request.args.get('ref', '') }}">
-            <label style="font-size:12px; color:#555; display:block; text-align:left; margin-top:5px;">Profile Picture (Optional):</label>
-            <input type="file" name="profile_pic" accept="image/*">
-            <input type="submit" value="Login / Signup">
-        </form>
+        {% if not otp_sent %}
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="step" value="send_otp">
+                <input type="email" name="user_id" placeholder="Enter Gmail Address" required>
+                <label style="font-size:12px; color:#555; display:block; text-align:left; margin-top:5px;">Profile Picture (Optional):</label>
+                <input type="file" name="profile_pic" accept="image/*">
+                <input type="submit" value="Send OTP to Email">
+            </form>
+        {% else %}
+            <p style="color:#27ae60; font-weight:bold; font-size:14px;">📩 OTP Sent Successfully!</p>
+            <form method="POST">
+                <input type="hidden" name="step" value="verify_otp">
+                <input type="number" name="entered_otp" placeholder="Enter 4-Digit OTP" required>
+                <input type="submit" value="Verify OTP & Login">
+            </form>
+        {% endif %}
     </div>
 </body>
 </html>
@@ -197,6 +211,8 @@ HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html>
 <head>
+{GA_TRACKING_SCRIPT}
+
     <title>Sab Kamao</title>
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
@@ -209,35 +225,31 @@ HTML_TEMPLATE = """
         .menu-btn { font-size: 22px; cursor: pointer; color: white; padding: 5px; }
         .container { padding: 15px; }
         .card { background: white; padding: 18px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.08); margin-bottom: 15px; }
-        input, select, textarea { width: 100%; padding: 11px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; }
+        input, select { width: 100%; padding: 11px; margin: 8px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 15px; }
         input[type=submit], button { background: #27ae60; color: white; border: none; font-weight: bold; cursor: pointer; padding: 12px; border-radius: 8px; width: 100%; font-size: 16px; margin-top: 5px; }
         .timer { font-size: 32px; font-weight: bold; color: #e67e22; text-align: center; margin: 10px 0; }
         .bottom-nav { position: fixed; bottom: 0; left: 0; right: 0; background: #ffffff; display: flex; justify-content: space-around; align-items: center; padding: 8px 0; border-top: 1px solid #e0e0e0; z-index: 99999; box-shadow: 0 -4px 15px rgba(0,0,0,0.08); }
         .nav-item { text-decoration: none; text-align: center; flex: 1; color: #333; cursor: pointer; }
-        .nav-icon { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 3px auto; }
+        .nav-icon { width: 40px; height: 40px; border-radius: 50%; display: flex; align-items: center; justify-content: center; margin: 0 auto 3px auto; }
         .red-grad { background: linear-gradient(135deg, #FF512F, #DD2476); box-shadow: 0 3px 8px rgba(221,36,118,0.3); }
         .green-grad { background: linear-gradient(135deg, #11998e, #38ef7d); box-shadow: 0 3px 8px rgba(56,239,125,0.3); }
         .blue-grad { background: linear-gradient(135deg, #2193b0, #6dd5ed); box-shadow: 0 3px 8px rgba(33,147,176,0.3); }
-        .purple-grad { background: linear-gradient(135deg, #8E2DE2, #4A00E0); box-shadow: 0 3px 8px rgba(142,45,226,0.3); }
-        .pink-grad { background: linear-gradient(135deg, #f12711, #f5af19); box-shadow: 0 3px 8px rgba(245,175,25,0.3); }
         .profile-avatar {
             width: 80px; height: 80px; border-radius: 50%; object-fit: cover;
             border: 3px solid #27ae60; margin: 0 auto 10px auto; display: flex;
             align-items: center; justify-content: center; font-size: 40px; background: #e8f5e9;
         }
-        .task-avatar {
-            width: 45px; height: 45px; border-radius: 50%; object-fit: cover;
-            border: 2px solid #27ae60; display: inline-block; vertical-align: middle; margin-right: 10px; background: #e8f5e9; text-align:center; line-height:45px; font-size:20px;
+        .warning-banner {
+            background: #fff3cd; color: #856404; border: 1.5px dashed #ffeeba;
+            padding: 12px 15px; border-radius: 10px; margin-bottom: 15px;
+            font-size: 14px; font-weight: bold; text-align: center;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.04);
         }
-        .reel-card { background: #000; border-radius: 12px; overflow: hidden; margin-bottom: 20px; box-shadow: 0 6px 20px rgba(0,0,0,0.15); color: #fff; }
-        .reel-header { padding: 12px; display: flex; align-items: center; background: rgba(0,0,0,0.7); justify-content: space-between; }
-        .reel-avatar { width: 38px; height: 38px; border-radius: 50%; object-fit: cover; border: 2px solid #27ae60; margin-right: 10px; background: #333; text-align:center; line-height:38px; font-size:16px; }
-        .reel-video { width: 100%; max-height: 400px; background: #111; display: block; object-fit: contain; }
-        .reel-footer { padding: 12px; background: rgba(0,0,0,0.8); }
-        .refer-box { background: #f9fdfa; border: 2px dashed #27ae60; padding: 15px; border-radius: 10px; text-align: center; margin-top: 10px; }
     </style>
 </head>
 <body>
+{GA_TRACKING_SCRIPT}
+
     <div class="header">
         <div>
             <div class="header-title">Sab Kamao - ₹75/Hour</div>
@@ -249,88 +261,45 @@ HTML_TEMPLATE = """
     </div>
 
     <div class="container">
-        {% with messages = get_flashed_messages(with_categories=true) %}
-          {% if messages %}
-            {% for category, message in messages %}
-              <div style="background: #e1f5fe; color: #01579b; padding: 12px; border-radius: 8px; margin-bottom: 15px; font-weight: bold; font-size: 14px; border: 1px solid #b3e5fc;">
-                {{ message }}
-              </div>
-            {% endfor %}
-          {% endif %}
-        {% endwith %}
-
         {% if msg %}
-            <div class="card" style="color:#1c4d25; font-weight:bold; text-align:center;">{{ msg|safe }}</div>
+            <div class="card" style="color:#1c4d25;" font-weight:bold; text-align:center;">{{ msg|safe }}</div>
         {% endif %}
 
         {% if page == 'home' %}
+            <!-- Sirf Kam Lo (Home) page par warning banner dikhega -->
+            <div class="warning-banner">
+                ⚠️ Apna kaam karne ke baad pesa apne malik owner se turant le le ok!
+            </div>
             <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#1c4d25;">💼 Available Tasks (3 KM Range)</h3>
-                    <a href="/" style="background:#27ae60; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-sync"></i> Refresh</a>
-                </div>
-                <p style="font-size:12px; color:#555; margin-bottom:15px;">📍 Aapki Location: <b>{{ user_loc_name }}</b></p>
-                
-                {% if active_task_info %}
-                    <div style="background:#fff3e0; border:1px solid #ffe0b2; padding:12px; border-radius:8px; margin-bottom:15px; text-align:center;">
-                        <p style="margin:0; color:#d84315; font-size:13px; font-weight:bold;">⚠️ Aapka ek task pehle se active/pending hai! Naya task lene ke liye pehle apna current task complete karein.</p>
-                    </div>
-                {% endif %}
-
+                <h3 style="margin-top:0; color:#1c4d25;"> Available Tasks (Kam Lo)</h3>
                 {% if not open_tasks %}
-                    <p style="color:#888;">Aapke 3 km range mein abhi koi open task nahi hai.</p>
+                    <p style="color:#888;">Abhi koi open task nahi hai.</p>
                 {% endif %}
-                
                 {% for task in open_tasks %}
-                    <div style="border-bottom:1px solid #eee; padding:12px 0; display:flex; align-items:center;">
-                        <div>
-                            {% if task[7] %}
-                                <img src="/static/uploads/{{ task[7] }}" class="task-avatar">
-                            {% else %}
-                                <div class="task-avatar">👤</div>
-                            {% endif %}
-                        </div>
-                        <div style="flex:1;">
-                            <b>{{ task[1] }}</b><br>
-                            <small style="color:#555;">Owner: <b>{{ task[6] }}</b> | Mode: <b>{{ task[2] }}</b></small><br>
-                            <small style="color:#e67e22;">📍 <b>{{ task[8] }}</b> (Distance: <b>{{ "%.2f"|format(task[9]) }} KM</b> away)</small>
-                            
-                            {% if active_task_info %}
-                                <button disabled style="background:#ccc; cursor:not-allowed; padding:8px; font-size:13px; margin-top:8px;">Task Locked (Complete Previous First)</button>
-                            {% else %}
-                                <form method="POST" style="margin-top:8px;" onsubmit="initTaskStart('{{ task[0] }}')">
-                                    <input type="hidden" name="action" value="verify_task_otp">
-                                    <input type="hidden" name="task_id" value="{{ task[0] }}">
-                                    <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required style="padding:8px; font-size:13px;">
-                                    <input type="submit" value="Start Work with OTP" style="padding:8px; font-size:13px;">
-                                </form>
-                            {% endif %}
-                        </div>
+                    <div style="border-bottom:1px solid #eee; padding:10px 0;">
+                        <b>{{ task[1] }}</b><br>
+                        <small style="color:#555;">Payment Mode: <b>{{ task[2] }}</b></small>
+                        <form method="POST" style="margin-top:5px;">
+                            <input type="hidden" name="action" value="verify_task_otp">
+                            <input type="hidden" name="task_id" value="{{ task[0] }}">
+                            <input type="number" name="otp" placeholder="Enter OTP from Task Owner" required>
+                            <input type="submit" value="Start Work with OTP">
+                        </form>
                     </div>
                 {% endfor %}
             </div>
 
-            {% if active_task_info %}
+            {% if session.get('active_task') %}
                 <div class="card">
                     <h3 style="text-align:center; color:#1c4d25; margin-top:0;">⏱️ Live Work Counter</h3>
-                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b>{{ active_task_info[1] }}</b></p>
+                    <p style="text-align:center; margin:0; color:#555;">Active Task: <b>{{ session.get('active_task_title') }}</b></p>
                     <div class="timer" id="time-display">00:00:00</div>
                     <div style="text-align:center; font-size:20px; color:#27ae60; font-weight:bold;" id="earning-display">Earned: ₹0.00</div>
-                    
-                    {% if not active_task_info[3] %}
-                        <form method="POST" style="margin-top:15px;" onsubmit="clearTaskTimer('{{ active_task_info[0] }}')">
-                            <input type="hidden" name="action" value="worker_finish_work">
-                            <input type="hidden" name="task_id" value="{{ active_task_info[0] }}">
-                            <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
-                            <input type="submit" value="Finish Work & Get Owner OTP" style="background:#e67e22;">
-                        </form>
-                    {% else %}
-                        <div style="background:#e8f5e9; border:1px solid #27ae60; padding:12px; border-radius:8px; text-align:center; margin-top:15px;">
-                            <p style="margin:0 0 5px 0; font-size:13px; color:#2e7d32;"><b>Your Completion OTP:</b></p>
-                            <span style="font-size:26px; font-weight:bold; color:#1c4d25;">{{ active_task_info[3] }}</span>
-                            <p style="margin:5px 0 0 0; font-size:11px; color:#555;">Ye OTP Kam Dene Wale (Task Owner) ko dein taaki wo final submit karein.</p>
-                        </div>
-                    {% endif %}
+                    <form method="POST" style="margin-top:15px;">
+                        <input type="hidden" name="action" value="complete_work">
+                        <input type="hidden" name="elapsed_seconds" id="elapsed_seconds" value="0">
+                        <input type="submit" value="Finish Work & Collect Earnings" style="background:#e74c3c;">
+                    </form>
                 </div>
             {% endif %}
         {% endif %}
@@ -338,9 +307,6 @@ HTML_TEMPLATE = """
         {% if page == 'kam_do' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#1c4d25;">➕ Post a New Task (Kam Do)</h3>
-                <div style="background:#f9fdfa; border:1px solid #27ae60; padding:10px; border-radius:8px; margin-bottom:10px; font-size:13px; color:#1c4d25;">
-                    📍 Task Location (Aapki Profile Location): <b>{{ user_loc_name }}</b>
-                </div>
                 <form method="POST">
                     <input type="hidden" name="action" value="create_task">
                     <label style="font-weight:600; font-size:14px;">Task Description:</label>
@@ -351,202 +317,18 @@ HTML_TEMPLATE = """
                         <option value="UPI Transfer">UPI Transfer</option>
                         <option value="Bank Transfer">Bank Transfer</option>
                     </select>
-                    <input type="submit" value="Post Task & Generate OTP" style="margin-top:10px;">
+                    <input type="submit" value="Post Task & Generate OTP">
                 </form>
             </div>
-
-            <div class="card">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-                    <h3 style="margin:0; color:#1c4d25;"><i class="fa-solid fa-list-check"></i> My Posted Tasks & Worker Tracking</h3>
-                    <a href="/download_pdf?type=owner" style="background:#3498db; color:#fff; padding:6px 10px; border-radius:6px; text-decoration:none; font-size:12px; font-weight:bold;"><i class="fa-solid fa-download"></i> PDF</a>
-                </div>
-                {% if not my_tasks %}
-                    <p style="color:#888; font-size:14px;">Aapne abhi tak koi task post nahi kiya hai.</p>
-                {% else %}
-                    {% for t in my_tasks %}
-                        <div style="border-bottom:1px solid #eee; padding:12px 0;">
-                            <b>{{ t[1] }}</b><br>
-                            <small style="color:#555;">Mode: <b>{{ t[2] }}</b> | Start OTP: <b style="color:#e67e22;">{{ t[3] }}</b></small><br>
-                            <small style="color:#555;">📍 Location: <b>{{ t[7] }}</b></small><br>
-                            
-                            {% if t[4] in ['IN_PROGRESS', 'WAITING_OWNER_APPROVAL'] %}
-                                <div style="background:#e3f2fd; padding:8px; border-radius:6px; margin-top:6px; border:1px solid #90caf9; font-size:12px;">
-                                    <span style="color:#0d47a1; font-weight:bold;">📡 Worker Live Tracking:</span><br>
-                                    Worker Phone: <b>{{ t[8] }}</b><br>
-                                    Worker Lat/Lng: <b>{{ t[9] }}, {{ t[10] }}</b>
-                                </div>
-                            {% endif %}
-
-                            <small style="color:#666; display:block; margin-top:4px;">Posted Time: {{ t[5] }}</small>
-                            <small style="color:#666;">Status: <b>{{ t[4] }}</b></small>
-                            {% if t[4] == 'COMPLETED' %}
-                                <br><small style="color:#27ae60;">Finished Time: {{ t[6] }}</small>
-                            {% endif %}
-                            
-                            {% if t[4] == 'WAITING_OWNER_APPROVAL' %}
-                                <div style="background:#fff3e0; padding:10px; border-radius:8px; margin-top:8px; border:1px solid #ffe0b2;">
-                                    <p style="margin:0 0 5px 0; font-size:12px; color:#d84315;"><b>Worker ne kaam khatam kar liya hai. Worker dwara diya gaya Completion OTP yahan dalein:</b></p>
-                                    <form method="POST">
-                                        <input type="hidden" name="action" value="owner_verify_completion">
-                                        <input type="hidden" name="task_id" value="{{ t[0] }}">
-                                        <input type="number" name="entered_completion_otp" placeholder="Enter Completion OTP" required style="padding:8px; font-size:13px;">
-                                        <input type="submit" value="Final Complete & Close Task" style="background:#27ae60; padding:8px; font-size:13px;">
-                                    </form>
-                                </div>
-                            {% endif %}
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
         {% endif %}
 
-        {% if page == 'reels' %}
-            <div class="card">
-                <h3 style="margin-top:0; color:#1c4d25;"><i class="fa-solid fa-video"></i> Upload Public Reel</h3>
-                <form method="POST" enctype="multipart/form-data">
-                    <input type="hidden" name="action" value="upload_reel">
-                    <label style="font-weight:600; font-size:14px;">Caption / Title:</label>
-                    <input type="text" name="caption" placeholder="Write something about your video..." required>
-                    <label style="font-weight:600; font-size:14px; display:block; margin-top:5px;">Select Video File (MP4/MOV):</label>
-                    <input type="file" name="reel_video" accept="video/*" required style="font-size:13px;">
-                    <input type="submit" value="Upload & Publish Publicly" style="background:#f39c12; margin-top:10px;">
-                </form>
-            </div>
-
-            <div>
-                <h3 style="color:#1c4d25; margin-bottom:12px;"><i class="fa-solid fa-film"></i> Public Reels Feed</h3>
-                {% if not all_reels %}
-                    <p style="color:#888; text-align:center;">Abhi koi reel upload nahi ki gayi hai. Pehli reel aap upload karein!</p>
-                {% else %}
-                    {% for reel in all_reels %}
-                        <div class="reel-card">
-                            <div class="reel-header">
-                                <div style="display:flex; align-items:center;">
-                                    {% if reel[5] %}
-                                        <img src="/static/uploads/{{ reel[5] }}" class="reel-avatar">
-                                    {% else %}
-                                        <div class="reel-avatar">👤</div>
-                                    {% endif %}
-                                    <div>
-                                        <b style="font-size:14px; color:#fff;">{{ reel[1] }}</b><br>
-                                        <small style="color:#aaa; font-size:11px;">{{ reel[4] }}</small>
-                                    </div>
-                                </div>
-                                {% if reel[1] == phone %}
-                                    <div>
-                                        <button onclick="toggleEditReel('{{ reel[0] }}')" style="background:#3498db; border:none; color:#fff; padding:4px 8px; font-size:11px; border-radius:4px; width:auto; margin-right:4px;">✏️ Edit</button>
-                                        <form method="POST" style="display:inline;" onsubmit="return confirm('Kya aap is reel ko delete karna chahte hain?');">
-                                            <input type="hidden" name="action" value="delete_reel">
-                                            <input type="hidden" name="reel_id" value="{{ reel[0] }}">
-                                            <button type="submit" style="background:#e74c3c; border:none; color:#fff; padding:4px 8px; font-size:11px; border-radius:4px; width:auto;">🗑️ Delete</button>
-                                        </form>
-                                    </div>
-                                {% endif %}
-                            </div>
-
-                            {% if reel[1] == phone %}
-                                <div id="edit_reel_{{ reel[0] }}" style="display:none; background:#222; padding:10px; border-bottom:1px solid #444;">
-                                    <form method="POST">
-                                        <input type="hidden" name="action" value="edit_reel">
-                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
-                                        <input type="text" name="new_caption" value="{{ reel[2] }}" required style="background:#333; color:#fff; border:1px solid #555; padding:8px; font-size:13px;">
-                                        <input type="submit" value="Update Title" style="background:#27ae60; padding:6px; font-size:12px;">
-                                    </form>
-                                </div>
-                            {% endif %}
-
-                            <video src="/static/videos/{{ reel[3] }}" controls class="reel-video"></video>
-                            
-                            <div class="reel-footer">
-                                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                                    <span style="font-size:14px; color:#fff; font-weight:bold; flex:1;">{{ reel[2] }}</span>
-                                    <form method="POST" style="margin:0;">
-                                        <input type="hidden" name="action" value="like_reel">
-                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
-                                        <button type="submit" style="background:transparent; border:1px solid #e74c3c; color:#e74c3c; padding:4px 10px; font-size:12px; border-radius:20px; width:auto;">
-                                            <i class="fa-solid fa-heart"></i> {{ reel[6] }}
-                                        </button>
-                                    </form>
-                                </div>
-
-                                <div style="border-top:1px solid #333; padding-top:8px; margin-top:8px;">
-                                    <small style="color:#aaa; font-weight:bold;"><i class="fa-solid fa-comments"></i> Comments:</small>
-                                    <div style="max-height:100px; overflow-y:auto; margin:5px 0;">
-                                        {% set comments = get_reel_comments(reel[0]) %}
-                                        {% if not comments %}
-                                            <p style="color:#778; font-size:11px; margin:2px 0;">No comments yet. Be the first to comment!</p>
-                                        {% else %}
-                                            {% for comm in comments %}
-                                                <div style="font-size:11px; margin-bottom:4px; background:#1a1a1a; padding:5px; border-radius:4px;">
-                                                    <b style="color:#27ae60;">{{ comm[0] }}:</b> <span style="color:#ddd;">{{ comm[1] }}</span>
-                                                </div>
-                                            {% endfor %}
-                                        {% endif %}
-                                    </div>
-                                    <form method="POST" style="display:flex; gap:5px; margin-top:5px;">
-                                        <input type="hidden" name="action" value="add_comment">
-                                        <input type="hidden" name="reel_id" value="{{ reel[0] }}">
-                                        <input type="text" name="comment_text" placeholder="Write a comment..." required style="background:#222; color:#fff; border:1px solid #444; padding:6px; font-size:12px; margin:0; border-radius:4px; flex:1;">
-                                        <button type="submit" style="background:#3498db; padding:6px 12px; font-size:12px; margin:0; border-radius:4px; width:auto;">Post</button>
-                                    </form>
-                                </div>
-                            </div>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-        {% endif %}
-
-        {% if page == 'refer' %}
-            <div class="card">
-                <h3 style="margin-top:0; color:#8E2DE2;"><i class="fa-solid fa-gift"></i> Refer & Earn</h3>
-                <p style="color:#555; font-size:14px;">Apne doston ko invite karein! Har naye registration par <b>Instant ₹100</b> paayein, aur jab wo ₹5000 tak withdraw kar lenge toh <b>₹500 Extra Bonus</b> auto-add hoga!</p>
-                <div class="refer-box">
-                    <p style="margin:0 0 5px 0; font-size:12px; color:#666;">Aapka Refer Link:</p>
-                    <input type="text" id="refLink" value="{{ request.host_url }}login?ref={{ ref_code }}" readonly style="background:#fff; text-align:center; font-size:13px; font-weight:bold; border:1px solid #27ae60;">
-                    <button onclick="copyRefLink()" style="background:#8E2DE2; margin-top:5px; padding:8px; font-size:14px;"><i class="fa-solid fa-copy"></i> Copy Referral Link</button>
-                </div>
-            </div>
-
-            <div class="card">
-                <h3 style="margin-top:0; color:#1c4d25;"><i class="fa-solid fa-history"></i> Referral History (Permanent)</h3>
-                {% if not refer_history %}
-                    <p style="color:#888; font-size:14px;">Abhi tak kisi ko refer nahi kiya hai.</p>
-                {% else %}
-                    <div style="overflow-x:auto;">
-                        <table style="width:100%; border-collapse:collapse; font-size:13px;">
-                            <tr style="background:#f2f2f2; text-align:left;">
-                                <th style="padding:8px; border-bottom:1px solid #ddd;">Gmail ID</th>
-                                <th style="padding:8px; border-bottom:1px solid #ddd;">Date</th>
-                                <th style="padding:8px; border-bottom:1px solid #ddd;">Status</th>
-                            </tr>
-                            {% for ref in refer_history %}
-                            <tr>
-                                <td style="padding:8px; border-bottom:1px solid #eee; word-break:break-all;"><b>{{ ref[0] }}</b></td>
-                                <td style="padding:8px; border-bottom:1px solid #eee; color:#666; font-size:11px;">{{ ref[1] }}</td>
-                                <td style="padding:8px; border-bottom:1px solid #eee;">
-                                    {% if ref[2] == 'MILESTONE_REACHED' %}
-                                        <span style="color:#27ae60; font-weight:bold;">₹500 Bonus Paid</span>
-                                    {% else %}
-                                        <span style="color:#e67e22; font-weight:bold;">₹100 Credited</span>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </table>
-                    </div>
-                {% endif %}
-            </div>
-        {% endif %}
-
-        {% if page == 'withdraw' %}
+        {% if page == 'withdrawl' %}
             <div class="card">
                 <h3 style="margin-top:0; color:#1c4d25;">💸 Withdraw Funds</h3>
-                <p style="font-size:12px; color:#555;">Total Withdrawn So Far: <b>₹{{ total_withdrawn }}</b></p>
                 <form method="POST">
                     <input type="hidden" name="action" value="withdraw">
                     <label>Enter Amount (₹):</label>
-                    <input type="number" name="amount" placeholder="Amount (Min ₹300)" min="1" required>
+                    <input type="number" name="amount" placeholder="Amount (Min ₹10)" min="1" required>
                     <label>Withdrawal Method:</label>
                     <select name="withdraw_type" id="withdraw_type" onchange="toggleWithdrawFields()" required>
                         <option value="upi">UPI Transfer</option>
@@ -565,9 +347,39 @@ HTML_TEMPLATE = """
                         <input type="number" name="acc_number" placeholder="Enter Account Number">
                         <label>IFSC Code:</label>
                         <input type="text" name="ifsc_code" placeholder="e.g. SBIN0001234" style="text-transform:uppercase;">
+                        <label>Login Password:</label>
+                        <input>type="text","number"name="Login password">                   
                     </div>
                     <input type="submit" value="Submit Withdrawal Request">
                 </form>
+            </div>
+
+            <div class="card">
+                <h3 style="margin-top:0; color:#1c4d25;">📜 Permanent Withdrawal History</h3>
+                {% if not withdrawal_history %}
+                    <p style="color:#888; font-size:14px;">Abhi tak koi withdrawal history nahi hai.</p>
+                {% else %}
+                    <div style="overflow-x:auto;">
+                        <table style="width:100%; border-collapse:collapse; font-size:13px;">
+                            <thead>
+                                <tr style="background:#f4f4f4; text-align:left; border-bottom:2px solid #ddd;">
+                                    <th style="padding:8px;">Details / Title</th>
+                                    <th style="padding:8px;">Amount</th>
+                                    <th style="padding:8px;">Time</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for item in withdrawal_history %}
+                                <tr style="border-bottom:1px solid #eee;">
+                                    <td style="padding:8px;">{{ item[1] }}</td>
+                                    <td style="padding:8px; color: {% if item[0] < 0 %}#e74c3c{% else %}#27ae60{% endif %}; font-weight:bold;">₹{{ item[0] }}</td>
+                                    <td style="padding:8px; color:#666; font-size:11px;">{{ item[2] }}</td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                {% endif %}
             </div>
         {% endif %}
     </div>
@@ -575,38 +387,26 @@ HTML_TEMPLATE = """
     <div class="bottom-nav">
         <a href="/" class="nav-item">
             <div class="nav-icon red-grad">
-                <i class="fa-solid fa-briefcase" style="font-size:16px; color:#fff;"></i>
+                <i class="fa-solid fa-briefcase" style="font-size:18px; color:#fff;"></i>
             </div>
-            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Kam Lo</span>
+            <span style="font-size:11px; font-weight:700; color:#2c3e50; display:block;">Kam Lo</span>
         </a>
         <a href="/kam_do" class="nav-item">
             <div class="nav-icon green-grad">
-                <i class="fa-solid fa-rectangle-ad" style="font-size:16px; color:#fff;"></i>
+                <i class="fa-solid fa-rectangle-ad" style="font-size:18px; color:#fff;"></i>
             </div>
-            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Kam Do</span>
+            <span style="font-size:11px; font-weight:700; color:#2c3e50; display:block;">Kam Do</span>
         </a>
-        <a href="/reels" class="nav-item">
-            <div class="nav-icon pink-grad">
-                <i class="fa-solid fa-clapperboard" style="font-size:16px; color:#fff;"></i>
-            </div>
-            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Reels</span>
-        </a>
-        <a href="/refer" class="nav-item">
-            <div class="nav-icon purple-grad">
-                <i class="fa-solid fa-gift" style="font-size:16px; color:#fff;"></i>
-            </div>
-            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Refer</span>
-        </a>
-        <a href="/withdraw" class="nav-item">
+        <a href="/withdrawl" class="nav-item">
             <div class="nav-icon blue-grad">
-                <i class="fa-solid fa-wallet" style="font-size:16px; color:#fff;"></i>
+                <i class="fa-solid fa-wallet" style="font-size:18px; color:#fff;"></i>
             </div>
-            <span style="font-size:9px; font-weight:700; color:#2c3e50; display:block;">Withdraw</span>
+            <span style="font-size:11px; font-weight:700; color:#2c3e50; display:block;">Withdraw</span>
         </a>
     </div>
 
     <div id="profileModal" style="display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.6); z-index:100000; justify-content:center; align-items:center;">
-        <div style="background:#fff; padding:20px; border-radius:15px; width:88%; max-width:360px; text-align:center; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.2); max-height: 90vh; overflow-y: auto;">
+        <div style="background:#fff; padding:20px; border-radius:15px; width:88%; max-width:360px; text-align:center; position:relative; box-shadow:0 10px 25px rgba(0,0,0,0.2);">
             <span onclick="closeProfileModal()" style="position:absolute; right:15px; top:10px; font-size:24px; cursor:pointer; font-weight:bold; color:#888;">&times;</span>
             {% if profile_pic %}
                 <img src="/static/uploads/{{ profile_pic }}" class="profile-avatar">
@@ -614,9 +414,8 @@ HTML_TEMPLATE = """
                 <div class="profile-avatar">👤</div>
             {% endif %}
             <h3 style="margin:5px 0; color:#1c4d25;">User Profile</h3>
-            <p style="margin:5px 0; color:#555; font-size:14px; word-break:break-all;"><b>ID:</b> {{ phone }}</p>
-            <p style="margin:5px 0 5px 0; color:#27ae60; font-weight:bold; font-size:16px;">Balance: ₹{{ balance }}</p>
-            <p style="margin:0 0 15px 0; color:#d35400; font-weight:bold; font-size:13px;">🕒 Live Time: <span id="live-clock">--:--:--</span></p>
+            <p style="margin:5px 0; color:#555; font-size:14px;"><b>ID:</b> {{ phone }}</p>
+            <p style="margin:5px 0 15px 0; color:#27ae60; font-weight:bold; font-size:16px;">Balance: ₹{{ balance }}</p>
 
             <button onclick="toggleEditProfile()" style="background:#3498db; margin-bottom:8px; font-size:14px; padding:9px;">✏️ Edit Profile Pic</button>
             <div id="editProfileSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd;">
@@ -624,66 +423,6 @@ HTML_TEMPLATE = """
                     <label style="font-size:12px; font-weight:bold; display:block; text-align:left;">Choose New Photo:</label>
                     <input type="file" name="new_profile_pic" accept="image/*" required style="font-size:12px;">
                     <input type="submit" value="Upload & Save" style="background:#27ae60; padding:8px; font-size:13px; margin-top:5px;">
-                </form>
-            </div>
-
-            <button onclick="toggleWorkHistory()" style="background:#2c3e50; margin-bottom:8px; font-size:14px; padding:9px;">📜 Work History & PDF</button>
-            <div id="workHistorySection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:220px; overflow-y:auto;">
-                <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-                    <h4 style="margin:0; color:#1c4d25; font-size:13px;">Completed History:</h4>
-                    <a href="/download_pdf?type=worker" style="background:#3498db; color:#fff; padding:4px 8px; border-radius:4px; text-decoration:none; font-size:11px; font-weight:bold;"><i class="fa-solid fa-download"></i> PDF Download</a>
-                </div>
-                {% if not work_history %}
-                    <p style="font-size:12px; color:#888;">Abhi tak koi work history nahi hai.</p>
-                {% else %}
-                    {% for wh in work_history %}
-                        <div style="border-bottom:1px solid #e0e0e0; padding:8px 0; font-size:12px;">
-                            <b>{{ wh[0] }}</b><br>
-                            <span style="color:#27ae60; font-weight:bold;">Earned: ₹{{ wh[1] }}</span><br>
-                            <span style="color:#555;">Started: {{ wh[2] }}</span><br>
-                            <span style="color:#555;">Finished: {{ wh[3] or 'In Progress' }}</span><br>
-                            <span style="color:#666;">Status: <b>{{ wh[4] }}</b></span>
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-
-            <button onclick="toggleNotifications()" style="background:#8e44ad; margin-bottom:8px; font-size:14px; padding:9px;">🔔 Login Notifications</button>
-            <div id="notificationsSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left; max-height:180px; overflow-y:auto;">
-                <h4 style="margin:0 0 6px 0; color:#8e44ad; font-size:13px;">Recent Logins / Alerts:</h4>
-                {% set logs = get_login_logs(phone) %}
-                {% if not logs %}
-                    <p style="font-size:11px; color:#888;">No login logs found.</p>
-                {% else %}
-                    {% for lg in logs %}
-                        <div style="font-size:11px; border-bottom:1px solid #eee; padding:4px 0; color:#444;">
-                            📍 IP/Device: <b>{{ lg[0] }}</b><br>
-                            🕒 Time: {{ lg[1] }}
-                        </div>
-                    {% endfor %}
-                {% endif %}
-            </div>
-
-            <button onclick="toggleLocationEdit()" style="background:#16a085; margin-bottom:8px; font-size:14px; padding:9px;">📍 Location Settings</button>
-            <div id="locationEditSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left;">
-                <form method="POST" action="/update_location">
-                    <label style="font-size:11px; font-weight:bold;">Area / Address Name:</label>
-                    <input type="text" name="location_name" id="prof_loc_name" value="{{ user_loc_name }}" required style="font-size:13px; padding:8px; margin:2px 0 6px 0;">
-                    <input type="hidden" name="lat" id="prof_lat" value="{{ user_lat }}">
-                    <input type="hidden" name="lng" id="prof_lng" value="{{ user_lng }}">
-                    <button type="button" onclick="getProfileLocation()" style="background:#3498db; padding:6px; font-size:12px; margin-bottom:6px;">📡 Get Live Location</button>
-                    <input type="submit" value="Save Location" style="background:#16a085; padding:8px; font-size:13px;">
-                </form>
-            </div>
-
-            <button onclick="toggleChangePassword()" style="background:#e67e22; margin-bottom:8px; font-size:14px; padding:9px;">🔑 Change Password</button>
-            <div id="changePasswordSection" style="display:none; background:#f9f9f9; padding:10px; border-radius:8px; margin-bottom:10px; border:1px solid #ddd; text-align:left;">
-                <form method="POST" action="/change_password">
-                    <label style="font-size:11px; font-weight:bold;">Old Password:</label>
-                    <input type="password" name="old_password" placeholder="Enter old password" required style="font-size:13px; padding:8px; margin:4px 0 8px 0;">
-                    <label style="font-size:11px; font-weight:bold;">New Password:</label>
-                    <input type="password" name="new_password" placeholder="Enter new password" required style="font-size:13px; padding:8px; margin:4px 0 8px 0;">
-                    <input type="submit" value="Update Password" style="background:#e67e22; padding:8px; font-size:13px; margin-top:5px;">
                 </form>
             </div>
 
@@ -700,26 +439,6 @@ HTML_TEMPLATE = """
             var elem = document.getElementById('editProfileSection');
             elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
         }
-        function toggleWorkHistory() {
-            var elem = document.getElementById('workHistorySection');
-            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-        }
-        function toggleNotifications() {
-            var elem = document.getElementById('notificationsSection');
-            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-        }
-        function toggleLocationEdit() {
-            var elem = document.getElementById('locationEditSection');
-            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-        }
-        function toggleChangePassword() {
-            var elem = document.getElementById('changePasswordSection');
-            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-        }
-        function toggleEditReel(reelId) {
-            var elem = document.getElementById('edit_reel_' + reelId);
-            elem.style.display = elem.style.display === 'none' ? 'block' : 'none';
-        }
         function toggleWithdrawFields() {
             var typeElem = document.getElementById('withdraw_type');
             if(!typeElem) return;
@@ -732,240 +451,85 @@ HTML_TEMPLATE = """
                 document.getElementById('upi-section').style.display = 'block';
             }
         }
-        function copyRefLink() {
-            var copyText = document.getElementById("refLink");
-            copyText.select();
-            copyText.setSelectionRange(0, 99999);
-            navigator.clipboard.writeText(copyText.value);
-            alert("Referral link copied to clipboard!");
-        }
-
-        function updateLiveClock() {
-            const clockElem = document.getElementById('live-clock');
-            if(clockElem) {
-                const options = { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true };
-                const timeString = new Date().toLocaleTimeString('en-US', options);
-                clockElem.innerText = timeString;
-            }
-        }
-        setInterval(updateLiveClock, 1000);
-        window.addEventListener('load', updateLiveClock);
-
-        function checkSessionToken() {
-            fetch('/check_session').then(res => res.json()).then(data => {
-                if(data.valid === false) {
-                    alert("⚠️ Aapki ID kisi doosri jagah login ho gayi hai, isliye yahan se logout kiya ja raha hai.");
-                    window.location.href = '/login';
-                }
-            }).catch(e => {});
-        }
-        setInterval(checkSessionToken, 5000);
-
-        function updateWorkerLiveLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(function(position) {
-                    var lat = position.coords.latitude;
-                    var lng = position.coords.longitude;
-                    fetch('/update_worker_location', {
-                        method: 'POST',
-                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                        body: 'lat=' + lat + '&lng=' + lng
-                    }).catch(e => console.log(e));
-                });
-            }
-        }
-        setInterval(updateWorkerLiveLocation, 10000);
-
-        function getProfileLocation() {
-            if (navigator.geolocation) {
-                navigator.geolocation.getCurrentPosition(function(position) {
-                    var lat = position.coords.latitude;
-                    var lng = position.coords.longitude;
-                    document.getElementById('prof_lat').value = lat;
-                    document.getElementById('prof_lng').value = lng;
-                    
-                    fetch('https://nominatim.openstreetmap.org/reverse?format=json&lat=' + lat + '&lon=' + lng)
-                        .then(response => response.json())
-                        .then(data => {
-                            if(data && data.address) {
-                                var name = data.address.suburb || data.address.neighbourhood || data.address.city || data.address.town || data.display_name;
-                                document.getElementById('prof_loc_name').value = name;
-                            }
-                        }).catch(e => console.log(e));
-
-                    alert("Location & Address fetched!");
-                }, function(error) {
-                    alert("Unable to retrieve live location.");
-                });
-            }
-        }
-
+        let seconds = 0;
         const ratePerHour = 75;
-
-        function initTaskStart(taskId) {
-            localStorage.removeItem('sab_kamao_start_' + taskId);
-            localStorage.setItem('sab_kamao_start_' + taskId, Date.now().toString());
-        }
-
-        function clearTaskTimer(taskId) {
-            localStorage.removeItem('sab_kamao_start_' + taskId);
-        }
-
         function updateTimer() {
             const timerElem = document.getElementById('time-display');
             if (timerElem) {
-                {% if active_task_info %}
-                    var activeId = "{{ active_task_info[0] }}";
-                    var key = 'sab_kamao_start_' + activeId;
-                    let startTime = localStorage.getItem(key);
-                    if (!startTime) {
-                        startTime = Date.now().toString();
-                        localStorage.setItem(key, startTime);
-                    }
-                    let now = Date.now();
-                    let seconds = Math.floor((now - parseInt(startTime)) / 1000);
-                    if (seconds < 0) seconds = 0;
-
-                    document.getElementById('elapsed_seconds').value = seconds;
-                    let hrs = Math.floor(seconds / 3600);
-                    let mins = Math.floor((seconds % 3600) / 60);
-                    let secs = seconds % 60;
-                    let formattedTime = (hrs < 10 ? "0" + hrs : hrs) + ":" + (mins < 10 ? "0" + mins : mins) + ":" + (secs < 10 ? "0" + secs : secs);
-                    timerElem.innerText = formattedTime;
-                    let currentEarning = ((seconds / 3600) * ratePerHour).toFixed(2);
-                    document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
-                {% endif %}
+                seconds++;
+                document.getElementById('elapsed_seconds').value = seconds;
+                let hrs = Math.floor(seconds / 3600);
+                let mins = Math.floor((seconds % 3600) / 60);
+                let secs = seconds % 60;
+                let formattedTime = (hrs < 10 ? "0" + hrs : hrs) + ":" + (mins < 10 ? "0" + mins : mins) + ":" + (secs < 10 ? "0" + secs : secs);
+                timerElem.innerText = formattedTime;
+                let currentEarning = ((seconds / 3600) * ratePerHour).toFixed(2);
+                document.getElementById('earning-display').innerText = "Earned: ₹" + currentEarning;
             }
         }
         setInterval(updateTimer, 1000);
-        window.onload = updateTimer;
     </script>
 </body>
 </html>
 """
 
-def get_reel_comments(reel_id):
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-    c.execute("SELECT commenter_phone, comment_text, timestamp FROM reel_comments WHERE reel_id = ? ORDER BY id DESC", (reel_id,))
-    comms = c.fetchall()
-    conn.close()
-    return comms
-
-def get_login_logs(phone):
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-    c.execute("SELECT ip_address, timestamp FROM login_logs WHERE phone = ? ORDER BY id DESC LIMIT 10", (phone,))
-    logs = c.fetchall()
-    conn.close()
-    return logs
-
-app.jinja_env.globals.update(get_reel_comments=get_reel_comments)
-app.jinja_env.globals.update(get_login_logs=get_login_logs)
-
-@app.route('/check_session', methods=['GET'])
-def check_session():
-    if not session.get('logged_in') or not session.get('phone'):
-        return {'valid': False}
-    phone = session.get('phone')
-    token = session.get('session_token')
-    
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-    c.execute("SELECT active_session_token FROM users WHERE phone = ?", (phone,))
-    row = c.fetchone()
-    conn.close()
-    
-    if row and row[0] == token:
-        return {'valid': True}
-    return {'valid': False}
-
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     msg = ""
-    ref_code_input = request.args.get('ref', '').strip()
-    
+    otp_sent = False
     if request.method == 'POST':
-        email = request.form.get('email', '').strip().lower()
-        password = request.form.get('password', '').strip()
-        ref_code_input = request.form.get('ref_code_input', '').strip()
-        
-        profile_pic_filename = ''
-        if 'profile_pic' in request.files:
-            file = request.files['profile_pic']
-            if file and allowed_file(file.filename, ALLOWED_IMG_EXTENSIONS):
-                filename = secure_filename(f"{email}_{file.filename}")
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
-                profile_pic_filename = filename
+        step = request.form.get('step')
+        if step == 'send_otp':
+            user_id = request.form.get('user_id', '').strip().lower()
+            profile_pic_filename = ''
+            if 'profile_pic' in request.files:
+                file = request.files['profile_pic']
+                if file and allowed_file(file.filename):
+                    filename = secure_filename(f"{user_id}_{file.filename}")
+                    file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+                    profile_pic_filename = filename
 
-        if "@" in email and "." in email and len(password) > 0:
-            conn = sqlite3.connect('sab_kamao.db')
-            c = conn.cursor()
-            c.execute('SELECT phone, password, referral_code, lat, lng FROM users WHERE phone = ?', (email,))
-            row = c.fetchone()
-            
-            my_unique_ref = ''.join(random.choices('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789', k=6))
-            new_token = ''.join(random.choices('abcdefghijklmnopqrstuvwxyz0123456789', k=16))
-            client_ip = request.remote_addr or 'Mobile App'
+            if "@" in user_id and "." in user_id:
+                gen_otp = str(random.randint(1000, 9999))
+                session['temp_user'] = user_id
+                session['temp_login_otp'] = gen_otp
+                session['temp_profile_pic'] = profile_pic_filename
+                send_email_otp(user_id, gen_otp)
+                flash(f"🔑 Aapka Test OTP yeh raha: {gen_otp}", "success")
+                otp_sent = True
+            else:
+                msg = "❌ Kripya sahi Gmail address dalein."
+        elif step == 'verify_otp':
+            entered_otp = request.form.get('entered_otp', '').strip()
+            correct_otp = session.get('temp_login_otp')
+            user_id = session.get('temp_user')
+            profile_pic = session.get('temp_profile_pic', '')
 
-            user_lat = row[3] if row and len(row) > 3 and row[3] else 28.4744
-            user_lng = row[4] if row and len(row) > 4 and row[4] else 77.5040
-            current_time_str = get_formatted_time(user_lat, user_lng)
-
-            if not row:
-                hashed_pw = generate_password_hash(password)
-                c.execute('INSERT INTO users (phone, balance, profile_pic, referral_code, password, location_name, active_session_token) VALUES (?, 0.0, ?, ?, ?, ?, ?)', 
-                            (email, profile_pic_filename, my_unique_ref, hashed_pw, 'Greater Noida', new_token))
-                c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, current_time_str))
-                conn.commit()
-
-                if ref_code_input:
-                    c.execute('SELECT phone FROM users WHERE referral_code = ?', (ref_code_input,))
-                    referrer = c.fetchone()
-                    if referrer and referrer[0] != email:
-                        referrer_phone = referrer[0]
-                        c.execute('UPDATE users SET balance = balance + 100.0 WHERE phone = ?', (referrer_phone,))
-                        c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                                    (referrer_phone, 100.0, f"Referral Bonus (User: {email})", current_time_str))
-                        c.execute('INSERT INTO referrals (referrer_phone, referred_phone, status, timestamp) VALUES (?, ?, ?, ?)',
-                                    (referrer_phone, email, 'REGISTERED', current_time_str))
-                        conn.commit()
-                
-                session['phone'] = email
+            if entered_otp and entered_otp == correct_otp:
+                session['phone'] = user_id
                 session['logged_in'] = True
-                session['session_token'] = new_token
+                session.pop('temp_login_otp', None)
+                session.pop('temp_user', None)
+                session.pop('temp_profile_pic', None)
+
+                send_login_notification(user_id)
+
+                conn = sqlite3.connect('sab_kamao.db')
+                c = conn.cursor()
+                c.execute('SELECT phone, profile_pic FROM users WHERE phone = ?', (user_id,))
+                row = c.fetchone()
+                if not row:
+                    c.execute('INSERT INTO users (phone, balance, profile_pic) VALUES (?, 0.0, ?)', (user_id, profile_pic))
+                elif profile_pic:
+                    c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic, user_id))
+                conn.commit()
                 conn.close()
-                flash("🎉 Account Successfully Created & Logged In!", "success")
                 return redirect(url_for('home'))
             else:
-                stored_hash = row[1]
-                if not stored_hash:
-                    c.execute('UPDATE users SET password = ? WHERE phone = ?', (generate_password_hash(password), email))
-                    conn.commit()
-                    stored_hash = generate_password_hash(password)
+                otp_sent = True
+                msg = "❌ Galat OTP! Screen par ya Render Logs par aaya OTP dalein."
 
-                if check_password_hash(stored_hash, password):
-                    session['phone'] = email
-                    session['logged_in'] = True
-                    session['session_token'] = new_token
-                    
-                    c.execute('UPDATE users SET active_session_token = ? WHERE phone = ?', (new_token, email))
-                    c.execute('INSERT INTO login_logs (phone, ip_address, timestamp) VALUES (?, ?, ?)', (email, client_ip, current_time_str))
-                    
-                    if profile_pic_filename:
-                        c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (profile_pic_filename, email))
-                    if not row[2]:
-                        c.execute('UPDATE users SET referral_code = ? WHERE phone = ?', (my_unique_ref, email))
-                    conn.commit()
-                    conn.close()
-                    return redirect(url_for('home'))
-                else:
-                    conn.close()
-                    msg = "❌ Galat Password! Kripya sahi password dalein."
-        else:
-            msg = "❌ Kripya valid Gmail address aur password dalein."
-
-    return render_template_string(LOGIN_TEMPLATE, msg=msg, ref_code_input=ref_code_input)
+    return render_template_string(LOGIN_TEMPLATE, msg=msg, otp_sent=otp_sent)
 
 @app.route('/update_profile', methods=['POST'])
 def update_profile():
@@ -974,7 +538,7 @@ def update_profile():
     phone = session.get('phone')
     if 'new_profile_pic' in request.files:
         file = request.files['new_profile_pic']
-        if file and allowed_file(file.filename, ALLOWED_IMG_EXTENSIONS):
+        if file and allowed_file(file.filename):
             filename = secure_filename(f"{phone}_{file.filename}")
             file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
             conn = sqlite3.connect('sab_kamao.db')
@@ -982,74 +546,7 @@ def update_profile():
             c.execute('UPDATE users SET profile_pic = ? WHERE phone = ?', (filename, phone))
             conn.commit()
             conn.close()
-            flash("✅ Profile picture updated successfully!", "success")
     return redirect(request.referrer or url_for('home'))
-
-@app.route('/update_location', methods=['POST'])
-def update_location():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    phone = session.get('phone')
-    try:
-        location_name = request.form.get('location_name', 'Greater Noida').strip()
-        lat = float(request.form.get('lat', 28.4744))
-        lng = float(request.form.get('lng', 77.5040))
-        conn = sqlite3.connect('sab_kamao.db')
-        c = conn.cursor()
-        c.execute('UPDATE users SET lat = ?, lng = ?, location_name = ? WHERE phone = ?', (lat, lng, location_name, phone))
-        conn.commit()
-        conn.close()
-        flash("✅ Location successfully updated!", "success")
-    except Exception as e:
-        flash("❌ Invalid location values!", "danger")
-    return redirect(url_for('home'))
-
-@app.route('/update_worker_location', methods=['POST'])
-def update_worker_location():
-    if not session.get('logged_in'):
-        return '', 403
-    phone = session.get('phone')
-    try:
-        lat = float(request.form.get('lat', 28.4744))
-        lng = float(request.form.get('lng', 77.5040))
-        conn = sqlite3.connect('sab_kamao.db')
-        c = conn.cursor()
-        c.execute("UPDATE tasks SET worker_lat = ?, worker_lng = ? WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (lat, lng, phone))
-        conn.commit()
-        conn.close()
-        return '', 200
-    except:
-        return '', 400
-
-@app.route('/change_password', methods=['POST'])
-def change_password():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    phone = session.get('phone')
-    old_password = request.form.get('old_password', '').strip()
-    new_password = request.form.get('new_password', '').strip()
-
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-    c.execute('SELECT password FROM users WHERE phone = ?', (phone,))
-    row = c.fetchone()
-    conn.close()
-
-    if row and row[0] and check_password_hash(row[0], old_password):
-        if len(new_password) > 0:
-            new_hashed = generate_password_hash(new_password)
-            conn = sqlite3.connect('sab_kamao.db')
-            c = conn.cursor()
-            c.execute('UPDATE users SET password = ? WHERE phone = ?', (new_hashed, phone))
-            conn.commit()
-            conn.close()
-            flash("✅ Password successfully changed!", "success")
-        else:
-            flash("❌ Naya password khali nahi ho sakta.", "danger")
-    else:
-        flash("❌ Purana password galat hai!", "danger")
-
-    return redirect(url_for('home'))
 
 @app.route('/logout')
 def logout():
@@ -1066,72 +563,48 @@ def home():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
-
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'verify_task_otp':
-            c.execute("SELECT id FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
-            existing_active = c.fetchone()
-            if existing_active:
-                msg = "❌ Aapka ek task pehle se active hai! Naya task shuru nahi kar sakte."
-            else:
-                task_id = request.form.get('task_id')
-                input_otp = request.form.get('otp', '').strip()
-                c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
-                task = c.fetchone()
-                if task and str(task[0]).strip() == str(input_otp):
-                    start_dt = get_formatted_time(user_lat, user_lng)
-                    c.execute("UPDATE tasks SET status = 'IN_PROGRESS', worker_phone = ?, start_time = ? WHERE id = ?", (phone, start_dt, task_id))
-                    conn.commit()
-                    msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
-                else:
-                    msg = "❌ Galat OTP ya Task Pehle se active hai!"
-        elif action == 'worker_finish_work':
             task_id = request.form.get('task_id')
+            input_otp = request.form.get('otp', '').strip()
+            c.execute("SELECT otp, title FROM tasks WHERE id = ? AND status = 'OPEN'", (task_id,))
+            task = c.fetchone()
+            if task and str(task[0]).strip() == str(input_otp):
+                c.execute("UPDATE tasks SET status = 'IN_PROGRESS' WHERE id = ?", (task_id,))
+                conn.commit()
+                session['active_task'] = task_id
+                session['active_task_title'] = task[1]
+                msg = "🎉 OTP Verified! Work Started. Timer chalu ho gaya hai."
+            else:
+                msg = "❌ Galat OTP ya Task Pehle se active hai!"
+        elif action == 'complete_work':
             total_time_seconds = float(request.form.get('elapsed_seconds', 0))
             hours = total_time_seconds / 3600
             total_earned = round(hours * 75, 2)
             if total_earned < 1.0:
                 total_earned = 1.0
-            
-            comp_otp = str(random.randint(1000, 9999))
-            finish_dt = get_formatted_time(user_lat, user_lng)
-            
-            c.execute("UPDATE tasks SET status = 'WAITING_OWNER_APPROVAL', completion_otp = ?, finish_time = ?, amount_earned = ? WHERE id = ? AND worker_phone = ?", 
-                        (comp_otp, finish_dt, total_earned, task_id, phone))
-            
             c.execute('UPDATE users SET balance = balance + ? WHERE phone = ?', (total_earned, phone))
-            c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                        (phone, total_earned, f"Work Earned: ₹{total_earned} (₹75/hr)", get_formatted_time(user_lat, user_lng)))
+            c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
+                        (phone, total_earned, "Work Earned (₹75/hr)"))
+            active_task_id = session.get('active_task')
+            if active_task_id:
+                c.execute("UPDATE tasks SET status = 'COMPLETED' WHERE id = ?", (active_task_id,))
             conn.commit()
-            msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye. Ab Kam Dene Wale (Owner) ko apna Completion OTP dein taaki wo task final close kar sake."
+            session.pop('active_task', None)
+            session.pop('active_task_title', None)
+            msg = f"🎉 Work Finished! Aapne ₹{total_earned} kamaye aur Wallet me add ho gaye!"
 
-    c.execute("SELECT id, title, status, completion_otp, start_time, amount_earned FROM tasks WHERE worker_phone = ? AND status IN ('IN_PROGRESS', 'WAITING_OWNER_APPROVAL')", (phone,))
-    active_task_info = c.fetchone()
+    c.execute("SELECT balance, profile_pic FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
 
-    open_tasks = []
-    if not active_task_info:
-        c.execute("SELECT t.id, t.title, t.payment_method, t.otp, t.lat, t.lng, t.provider_phone, u.profile_pic, t.location_name FROM tasks t JOIN users u ON t.provider_phone = u.phone WHERE t.status = 'OPEN'")
-        all_open_tasks = c.fetchall()
-        for t in all_open_tasks:
-            t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name = t
-            dist = calculate_distance(user_lat, user_lng, t_lat, t_lng)
-            if dist <= 3.5: 
-                open_tasks.append((t_id, t_title, t_pay, t_otp, t_lat, t_lng, t_provider, t_dp, t_loc_name, dist))
-
-    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-    work_history = c.fetchall()
-
+    c.execute("SELECT id, title, payment_method FROM tasks WHERE status = 'OPEN'")
+    open_tasks = c.fetchall()
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, active_task_info=active_task_info, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='home', phone=phone, balance=balance, profile_pic=profile_pic, open_tasks=open_tasks, msg=msg)
 
 @app.route('/kam_do', methods=['GET', 'POST'])
 def kam_do():
@@ -1142,50 +615,27 @@ def kam_do():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
-
     if request.method == 'POST':
         action = request.form.get('action')
         if action == 'create_task':
             title = request.form.get('title')
             pay_method = request.form.get('pay_method')
-
             gen_otp = str(random.randint(1000, 9999))
-            post_dt = get_formatted_time(user_lat, user_lng)
-            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp, status, start_time, lat, lng, location_name) VALUES (?, ?, ?, ?, 'OPEN', ?, ?, ?, ?)",
-                        (phone, title, pay_method, gen_otp, post_dt, user_lat, user_lng, user_loc_name))
+            c.execute("INSERT INTO tasks (provider_phone, title, payment_method, otp) VALUES (?, ?, ?, ?)",
+                        (phone, title, pay_method, gen_otp))
             conn.commit()
             msg = f"✅ Task Posted! OTP: <b style='font-size:22px; color:#e67e22;'>{gen_otp}</b> (Ye OTP kaam karne wale ko dein)"
-        elif action == 'owner_verify_completion':
-            task_id = request.form.get('task_id')
-            entered_otp = request.form.get('entered_completion_otp', '').strip()
-            c.execute("SELECT completion_otp, provider_phone FROM tasks WHERE id = ? AND status = 'WAITING_OWNER_APPROVAL'", (task_id,))
-            t_row = c.fetchone()
-            if t_row and t_row[1] == phone and str(t_row[0]).strip() == str(entered_otp):
-                c.execute("UPDATE tasks SET status = 'COMPLETED' WHERE id = ?", (task_id,))
-                conn.commit()
-                msg = "✅ Task successfully verified and closed!"
-            else:
-                msg = "❌ Galat Completion OTP!"
 
-    c.execute("SELECT id, title, payment_method, otp, status, start_time, finish_time, location_name, worker_phone, worker_lat, worker_lng FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
-    my_tasks = c.fetchall()
-
-    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-    work_history = c.fetchall()
-
+    c.execute("SELECT balance, profile_pic FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, my_tasks=my_tasks, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
+    return render_template_string(HTML_TEMPLATE, page='kam_do', phone=phone, balance=balance, profile_pic=profile_pic, msg=msg)
 
-@app.route('/reels', methods=['GET', 'POST'])
-def reels():
+@app.route('/withdrawl', methods=['GET', 'POST'])
+def withdrawl():
     if not session.get('logged_in'):
         return redirect(url_for('login'))
     msg = ""
@@ -1193,124 +643,13 @@ def reels():
     conn = sqlite3.connect('sab_kamao.db')
     c = conn.cursor()
 
-    c.execute("SELECT balance, profile_pic, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    user_lat = res[2] if res and res[2] else 28.4744
-    user_lng = res[3] if res and res[3] else 77.5040
-    user_loc_name = res[4] if res and res[4] else 'Greater Noida'
-
     if request.method == 'POST':
         action = request.form.get('action')
-        if action == 'upload_reel':
-            caption = request.form.get('caption', '').strip()
-            if 'reel_video' in request.files:
-                file = request.files['reel_video']
-                if file and allowed_file(file.filename, ALLOWED_VID_EXTENSIONS):
-                    vid_filename = secure_filename(f"{phone}_{int(datetime.now().timestamp())}_{file.filename}")
-                    file.save(os.path.join(app.config['VIDEO_FOLDER'], vid_filename))
-                    
-                    c.execute("INSERT INTO reels (uploader_phone, caption, video_filename, timestamp) VALUES (?, ?, ?, ?)",
-                                (phone, caption, vid_filename, get_formatted_time(user_lat, user_lng)))
-                    conn.commit()
-                    msg = "✅ Reel successfully uploaded and published publicly!"
-                else:
-                    msg = "❌ Invalid video format! Please upload MP4/MOV."
-        elif action == 'like_reel':
-            reel_id = request.form.get('reel_id')
-            c.execute("UPDATE reels SET likes = likes + 1 WHERE id = ?", (reel_id,))
-            conn.commit()
-        elif action == 'edit_reel':
-            reel_id = request.form.get('reel_id')
-            new_caption = request.form.get('new_caption', '').strip()
-            c.execute("UPDATE reels SET caption = ? WHERE id = ? AND uploader_phone = ?", (new_caption, reel_id, phone))
-            conn.commit()
-            msg = "✅ Reel title updated successfully!"
-        elif action == 'delete_reel':
-            reel_id = request.form.get('reel_id')
-            c.execute("SELECT video_filename FROM reels WHERE id = ? AND uploader_phone = ?", (reel_id, phone))
-            row = c.fetchone()
-            if row:
-                v_file = row[0]
-                try:
-                    os.remove(os.path.join(app.config['VIDEO_FOLDER'], v_file))
-                except:
-                    pass
-                c.execute("DELETE FROM reels WHERE id = ?", (reel_id,))
-                c.execute("DELETE FROM reel_comments WHERE reel_id = ?", (reel_id,))
-                conn.commit()
-                msg = "🗑️ Reel deleted successfully!"
-        elif action == 'add_comment':
-            reel_id = request.form.get('reel_id')
-            comment_text = request.form.get('comment_text', '').strip()
-            if comment_text:
-                c.execute("INSERT INTO reel_comments (reel_id, commenter_phone, comment_text, timestamp) VALUES (?, ?, ?, ?)",
-                            (reel_id, phone, comment_text, get_formatted_time(user_lat, user_lng)))
-                conn.commit()
-
-    c.execute("SELECT r.id, r.uploader_phone, r.caption, r.video_filename, r.timestamp, u.profile_pic, r.likes FROM reels r JOIN users u ON r.uploader_phone = u.phone ORDER BY r.id DESC")
-    all_reels = c.fetchall()
-
-    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-    work_history = c.fetchall()
-
-    conn.close()
-
-    return render_template_string(HTML_TEMPLATE, page='reels', phone=phone, balance=balance, profile_pic=profile_pic, all_reels=all_reels, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
-
-@app.route('/refer', methods=['GET'])
-def refer():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    phone = session.get('phone')
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-
-    c.execute("SELECT balance, profile_pic, referral_code, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    user = c.fetchone()
-    balance = user[0] if user else 0.0
-    profile_pic = user[1] if user else ''
-    ref_code = user[2] if user and user[2] else 'REF123'
-    user_lat = user[3] if user and user[3] else 28.4744
-    user_lng = user[4] if user and user[4] else 77.5040
-    user_loc_name = user[5] if user and user[5] else 'Greater Noida'
-
-    c.execute("SELECT referred_phone, timestamp, status FROM referrals WHERE referrer_phone = ? ORDER BY id DESC", (phone,))
-    refer_history = c.fetchall()
-
-    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-    work_history = c.fetchall()
-
-    conn.close()
-
-    return render_template_string(HTML_TEMPLATE, page='refer', phone=phone, balance=balance, profile_pic=profile_pic, ref_code=ref_code, refer_history=refer_history, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history)
-
-@app.route('/withdraw', methods=['GET', 'POST'])
-def withdraw():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    msg = ""
-    phone = session.get('phone')
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-
-    c.execute("SELECT balance, profile_pic, total_withdrawn, lat, lng, location_name FROM users WHERE phone=?", (phone,))
-    res = c.fetchone()
-    balance = res[0] if res else 0.0
-    profile_pic = res[1] if res else ''
-    total_withdrawn = res[2] if res else 0.0
-    user_lat = res[3] if res and res[3] else 28.4744
-    user_lng = res[4] if res and res[4] else 77.5040
-    user_loc_name = res[5] if res and res[5] else 'Greater Noida'
-
-    if request.method == 'POST':
-        action = request.form.get('action')
-        if action == 'withdraw':
+        if action == 'withdrawl':
             amount = float(request.form.get('amount', 0))
-            withdraw_type = request.form.get('withdraw_type')
+            withdrawl_type = request.form.get('withdraw_type')
 
-            if withdraw_type == 'upi':
+            if withdrawl_type == 'upi':
                 upi_id = request.form.get('upi_id', '')
                 details_str = f"UPI ID: {upi_id}"
             else:
@@ -1318,91 +657,34 @@ def withdraw():
                 bank_name = request.form.get('bank_name', '')
                 acc_number = request.form.get('acc_number', '')
                 ifsc_code = request.form.get('ifsc_code', '').upper()
-                details_str = f"Name: {acc_holder}\nBank: {bank_name}\nAccount No: {acc_number}\nIFSC: {ifsc_code}"
+                details_str = f"Name: {acc_holder} | Bank: {bank_name} | Acc: {acc_number} | IFSC: {ifsc_code}"
 
-            if amount < 300:
+            c.execute('SELECT balance FROM users WHERE phone = ?', (phone,))
+            res = c.fetchone()
+            current_bal = res[0] if res else 0.0
+
+            if amount < 10:
                 msg = "❌ Minimum withdrawal amount is ₹300!"
-            elif amount > balance:
+            elif amount > current_bal:
                 msg = "❌ Insufficient Balance!"
             else:
-                new_total_withdrawn = total_withdrawn + amount
-                c.execute('UPDATE users SET balance = balance - ?, total_withdrawn = ? WHERE phone = ?', (amount, new_total_withdrawn, phone))
-                c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()})", get_formatted_time(user_lat, user_lng)))
+                c.execute('UPDATE users SET balance = balance - ? WHERE phone = ?', (amount, phone))
+                c.execute("INSERT INTO transactions (phone, amount, title) VALUES (?, ?, ?)",
+                            (phone, -amount, f"Withdrawal ({withdraw_type.upper()}): {details_str}"))
                 conn.commit()
-
-                c.execute("SELECT referrer_phone, milestone_paid FROM referrals WHERE referred_phone = ?", (phone,))
-                ref_record = c.fetchone()
-                if ref_record and ref_record[1] == 0: 
-                    if new_total_withdrawn >= 5000:
-                        referrer_phone = ref_record[0]
-                        c.execute('UPDATE users SET balance = balance + 500.0 WHERE phone = ?', (referrer_phone,))
-                        c.execute("INSERT INTO transactions (phone, amount, title, timestamp) VALUES (?, ?, ?, ?)",
-                                    (referrer_phone, 500.0, f"Referral Milestone Bonus (User {phone} crossed ₹5000 withdrawal)", get_formatted_time(user_lat, user_lng)))
-                        c.execute("UPDATE referrals SET milestone_paid = 1, status = 'MILESTONE_REACHED' WHERE referred_phone = ?", (phone,))
-                        conn.commit()
-
                 send_withdrawal_email(phone, amount, withdraw_type, details_str)
                 msg = f"✅ ₹{amount} Withdrawal Request Submitted!"
 
-    c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-    work_history = c.fetchall()
+    c.execute("SELECT balance, profile_pic FROM users WHERE phone=?", (phone,))
+    res = c.fetchone()
+    balance = res[0] if res else 0.0
+    profile_pic = res[1] if res else ''
 
+    c.execute("SELECT amount, title, timestamp FROM transactions WHERE phone = ? ORDER BY id DESC", (phone,))
+    withdrawal_history = c.fetchall()
     conn.close()
 
-    return render_template_string(HTML_TEMPLATE, page='withdraw', phone=phone, balance=balance, profile_pic=profile_pic, total_withdrawn=total_withdrawn, user_lat=user_lat, user_lng=user_lng, user_loc_name=user_loc_name, work_history=work_history, msg=msg)
-
-@app.route('/download_pdf', methods=['GET'])
-def download_pdf():
-    if not session.get('logged_in'):
-        return redirect(url_for('login'))
-    phone = session.get('phone')
-    history_type = request.args.get('type', 'worker')
-    
-    conn = sqlite3.connect('sab_kamao.db')
-    c = conn.cursor()
-    c.execute("SELECT lat, lng FROM users WHERE phone = ?", (phone,))
-    u_loc = c.fetchone()
-    u_lat = u_loc[0] if u_loc and u_loc[0] else 28.4744
-    u_lng = u_loc[1] if u_loc and u_loc[1] else 77.5040
-
-    if history_type == 'owner':
-        c.execute("SELECT title, payment_method, status, start_time, finish_time, location_name FROM tasks WHERE provider_phone = ? ORDER BY id DESC", (phone,))
-        title_text = "Task Provider History Report"
-    else:
-        c.execute("SELECT title, amount_earned, start_time, finish_time, status FROM tasks WHERE worker_phone = ? ORDER BY id DESC", (phone,))
-        title_text = "Worker Earnings & History Report"
-    rows = c.fetchall()
-    conn.close()
-
-    html_content = f"""
-    <html>
-    <head><title>{title_text}</title></head>
-    <body style="font-family: Arial; padding: 20px;">
-        <h2>{title_text}</h2>
-        <p><b>User Account:</b> {phone}</p>
-        <p><b>Generated Date (IST):</b> {get_formatted_time(u_lat, u_lng)}</p>
-        <hr>
-        <table border="1" cellpadding="8" cellspacing="0" style="width:100%; border-collapse:collapse; font-size:13px;">
-            <tr style="background:#f2f2f2;">
-                <th>Task Title</th>
-                <th>Details / Earnings</th>
-                <th>Start Time</th>
-                <th>Finish Time</th>
-                <th>Status</th>
-            </tr>
-    """
-    for r in rows:
-        html_content += f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td><td>{r[4]}</td></tr>"
-    html_content += """
-        </table>
-        <br><button onclick="window.print()" style="padding:10px 20px; background:#27ae60; color:#fff; border:none; border-radius:5px; font-weight:bold; cursor:pointer;">Print / Save as PDF</button>
-    </body>
-    </html>
-    """
-    response = make_response(html_content)
-    response.headers["Content-Type"] = "text/html"
-    return response
+    return render_template_string(HTML_TEMPLATE, page='withdraw', phone=phone, balance=balance, profile_pic=profile_pic, msg=msg, withdrawal_history=withdrawal_history)
 
 if __name__ == '__main__':
     init_db()

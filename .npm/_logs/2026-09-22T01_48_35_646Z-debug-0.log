@@ -1,0 +1,36 @@
+0 verbose cli /data/data/com.termux/files/usr/bin/node /data/data/com.termux/files/usr/bin/npm
+1 info using npm@11.19.1
+2 info using node@v26.4.0
+3 silly config load:file:/data/data/com.termux/files/usr/lib/node_modules/npm/npmrc
+4 silly config load:file:/data/data/com.termux/files/home/.npmrc
+5 silly config load:file:/data/data/com.termux/files/usr/etc/npmrc
+6 verbose title npm install nodemailer
+7 verbose argv "install" "nodemailer"
+8 verbose logfile logs-max:10 dir:/data/data/com.termux/files/home/.npm/_logs/2026-09-22T01_48_35_646Z-
+9 verbose logfile /data/data/com.termux/files/home/.npm/_logs/2026-09-22T01_48_35_646Z-debug-0.log
+10 silly logfile done cleaning log files
+11 silly install-scripts no package.json at prefix Could not read package.json: Error: ENOENT: no such file or directory, open '/data/data/com.termux/files/home/package.json'
+12 silly packumentCache heap:1106771968 maxSize:276692992 maxEntrySize:138346496
+13 silly idealTree buildDeps
+14 silly fetch manifest nodemailer@*
+15 silly packumentCache full:https://registry.npmjs.org/nodemailer cache-miss
+16 http fetch GET 200 https://registry.npmjs.org/npm 690ms
+17 http fetch GET 200 https://registry.npmjs.org/nodemailer 781ms (cache miss)
+18 silly packumentCache full:https://registry.npmjs.org/nodemailer set size:undefined disposed:false
+19 silly placeDep ROOT nodemailer@10.0.10 OK for:  want: *
+20 silly reify moves {}
+21 http cache nodemailer@https://registry.npmjs.org/nodemailer/-/nodemailer-10.0.10.tgz 1ms (cache hit)
+22 silly tarball no local data for nodemailer@https://registry.npmjs.org/nodemailer/-/nodemailer-10.0.10.tgz. Extracting by manifest.
+23 http fetch GET 200 https://registry.npmjs.org/nodemailer/-/nodemailer-10.0.10.tgz 638ms (cache miss)
+24 silly ADD node_modules/nodemailer
+25 verbose cwd /data/data/com.termux/files/home
+26 verbose os Linux 5.4.254-android12-9-g3bdf085cac44-ab964
+27 verbose node v26.4.0
+28 verbose npm  v11.19.1
+29 notice
+29 notice New [31mmajor[39m version of npm available! [31m11.19.1[39m -> [34m12.0.2[39m
+29 notice Changelog: [34mhttps://github.com/npm/cli/releases/tag/v12.0.2[39m
+29 notice To update run: [4mnpm install -g npm@12.0.2[24m
+29 notice  { force: true, Symbol(proc-log.meta): true }
+30 verbose exit 0
+31 info ok
